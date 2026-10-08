@@ -72,6 +72,12 @@
 | [0062](0062-relative-playback-urls.md) | 播放地址给相对路径：`DirectStreamUrl` / `MediaSources[].Path` | 已采纳（修正 0006 落地时「给绝对 URL」的取巧做法） |
 | [0063](0063-version-label-at-aggregate-output.md) | 版本行标题位下沉到聚合层产出：emby 与出口插件读同一份 `versionLabel` | 已采纳（同 0043 的模式） |
 | [0064](0064-panel-session-sliding-expiry.md) | 面板会话：有效期可配且滑动过期，登录页独立、密码交给浏览器记忆 | 已采纳（细化 0017） |
+| [0065](0065-instance-port-root-path-fallback.md) | 实例端口对 Emby 根路径兜底（客户端按 origin 解析根相对地址时不再撞 404） | 已采纳（延伸 0062） |
+| [0066](0066-data-migration-only-via-framework.md) | 破坏性数据变更只有一条路：注册迁移任务，禁止在模块内偷接 | 已采纳（强化 0047、划清「模块内形状自增」边界） |
+| [0067](0067-mirror-fallback-sources.md) | 取源候选：内置公共 gh 代理，串行降级到官方直连 | 已采纳（细化 0019「下载地址可配置」的默认值；走代理时校验只防传输损坏，有意为之） |
+| [0068](0068-about-page-embedded-notice.md) | 「关于」页内嵌公告：内容放仓库，面板取回后隔离渲染 | 已采纳 |
+| [0069](0069-brand-graphic-assets.md) | 品牌图形资产：界面内不摆图标，标签页图标与 Emby 默认头像用品牌图 | 已采纳 |
+| [0070](0070-direct-stream-url-bare-stream.md) | `DirectStreamUrl` 去容器后缀：改回裸 `stream`（对齐真机） | 已采纳（收窄 0062 的拼法） |
 
 ## 新增一条 ADR
 
