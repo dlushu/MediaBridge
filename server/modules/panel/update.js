@@ -501,7 +501,7 @@ function relaunchIfPending() {
     return child.pid;
   } catch (e) {
     /* 拉不起来时**如实说清怎么办**：面板马上就退出，此时没人能救这一版 */
-    console.error(`  ✗ 面板重启：自拉起失败（面板即将退出，请手动重起进程）：${(e && e.message) || e}`);
+    console.error(`  ✘ 面板重启：自拉起失败（面板即将退出，请手动重起进程）：${(e && e.message) || e}`);
     return null;
   }
 }

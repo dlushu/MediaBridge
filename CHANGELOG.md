@@ -108,6 +108,22 @@
 
 ### 修复
 
+- **老内核 / 网络盘环境缓存库连环报错**（GitHub issue #3，`disk I/O error` → `no such table: line_cache`）：
+  - **根因一**：缓存库（线路结果 / 图片索引）开 WAL 需要共享内存，CentOS 7 老内核 overlayfs、
+    NFS / SMB 卷上拿不到，`PRAGMA journal_mode = WAL` 直接抛 `disk I/O error`。
+  - **根因二（面板 bug）**：`cachedb.open()` 先把句柄赋给模块级变量、后跑 pragma 与建表，
+    pragma 一抛错就留下**半初始化句柄**——之后所有访问报 `no such table`，完全掩盖真实原因。
+  - **改的是什么**（[ADR-0072](docs/adr/0072-cachedb-wal-fallback-delete-journal.md)）：
+    `open()` 原子化（全部初始化成功才登记句柄，失败关库重抛）；WAL 起不来时打一条 `✘` 级日志
+    并**降级 DELETE journal 继续跑**——缓存是可丢数据，不该为它让整个功能不可用。
+  - **对用户的影响**：老内核 / 网络盘环境面板照常可用（丢一点缓存读写并发收益，无感）；
+    卷本身坏掉（盘满 / 断连）时报的是真实原因，不再是误导性的 `no such table`。
+
+- **「日志」页的「仅错误」过滤抓不到业务失败行**：面板约定失败行打 `✘` 前缀，但调用点走的
+  是 `console.log`（级别是 `log`）——`logbus` 只按 `console` 方法分级，导致这些行进不了
+  「仅错误」、也不标红。现在按行首符号归级（`✘`→error、`⚠️`→warn），几十处调用点不用改；
+  标红样式（CSS 早已备好）随之生效。
+
 - **HamHub 点播时反复失败（等几秒才起播）**：HamHub 把面板下发的**根相对**拉流地址
   （`/videos/{id}/stream.hls?…`）**按 origin 解析**（RFC 3986：根相对替换整个 path），把 `/emby` 丢掉，
   打的是 `http://<主机>:<实例端口>/videos/…` —— 撞上实例端口的 404 守卫，反复退避重试（抓包里
@@ -120,19 +136,29 @@
     两种行为都能命中；下发的地址一字未改；面板自用端点（`accounts` / `instances` 等）仍照旧拒绝。
   - 真机对照见 [docs/emby-realdevice/12-direct-stream.md](docs/emby-realdevice/12-direct-stream.md) 的 12-6（**未复测**）。
 
-- **`DirectStreamUrl` 去容器后缀，改回裸 `stream`（对齐真机形态）**（契约变更记录见
-  [docs/emby-compat.md](docs/emby-compat.md)；决策见 [ADR-0070](docs/adr/0070-direct-stream-url-bare-stream.md)）：
-  - **改的是什么**：`MediaSources[].DirectStreamUrl` 由 `/videos/{ItemId}/stream.{Container}?…`
-    （`stream.mkv` / `stream.hls`）改为 **`/videos/{ItemId}/stream?…`（裸 `stream`，不带后缀）**。
-    **相对路径口径不变**（仍是根相对，见 [ADR-0062](docs/adr/0062-relative-playback-urls.md)）。
-  - **真机依据**：三台真机比对 —— 予初Emby（4.9.5.0）给的是裸 `stream`，即便 `Container='mkv'`
-    也不拼 `.mkv`（电影 / 剧集两条原文一致）；动漫Emby（4.10.1.0）与 OkEmby（4.9.1.90）
-    **干脆不返该字段**。面板此前拼后缀属**形态偏离**。详见
+- **Yamby 打不开带字幕轨条目的播放页**：字幕流（`MediaStreams[]` 里 `Type:'Subtitle'`）缺
+  `IsDefault` / `IsForced` 字段，Yamby 把 `IsDefault` 当必填，整条 `PlaybackInfo` 反序列化直接抛
+  `SerializationException`。已补 `IsDefault:false` / `IsForced:false`（外挂字幕本就不是默认/强制轨，
+  与真机一致）。其余客户端不受影响（它们读不到该字段时按 `false` 处理）。真机对照见
+  [docs/emby-realdevice/23-subtitles.md](docs/emby-realdevice/23-subtitles.md) 的 23-4（**未复测**）。
+
+- **`DirectStreamUrl` 容器后缀：`hls` 映射为 `m3u8`（曾为对齐真机去掉后缀，实测回归后恢复）**（契约变更记录见
+  [docs/emby-compat.md](docs/emby-compat.md)；决策见 [ADR-0071](docs/adr/0071-direct-stream-url-container-suffix.md)，
+  取代 [ADR-0070](docs/adr/0070-direct-stream-url-bare-stream.md)）：
+  - **改的是什么**：`MediaSources[].DirectStreamUrl` 保持带后缀形态
+    `/videos/{ItemId}/stream.{容器}?…`，但**不照抄 `Container` 字段**：`hls` → **`stream.m3u8`**
+    （`hls` 是 DTO 容器枚举值、不是播放器认得的扩展名；ExoPlayer 系按后缀推断类型只认 `.m3u8`，
+    真机的 HLS 拉流地址本就是 `*.m3u8`），其余容器原样拼（`stream.mkv` / `stream.mp4`）。
+  - **来龙去脉**：本发布周期内曾按真机形态（予初Emby 4.9.5.0 的 `DirectStreamUrl` 是裸 `stream`）
+    去掉过后缀（ADR-0070），实测**打断了一批靠 URL 后缀判类型的客户端**（如 CapyPlayer/1.1.6：
+    面板清单中继正常回 200，客户端却把 m3u8 文本当普通文件嗅探，报
+    `UnrecognizedInputFormatException`）—— 恢复后缀，**能播优先于真机形态对齐**。详见
     [docs/emby-realdevice/11-items-playbackinfo.md](docs/emby-realdevice/11-items-playbackinfo.md) 的 11-5（**未复测**）。
   - **影响哪些端点**：仅 `POST /api/emby/Items/{ItemId}/PlaybackInfo` 的
     `MediaSources[].DirectStreamUrl`。`MediaSources[].Id`（版本 Id）、`Path`、`Container` 字段本身不变。
   - **对客户端的影响**：**客户端无需改动** —— 拉流路由 `stream(\.[a-z0-9]+)?` 对裸 `stream` 与
-    `stream.{ext}` 一并认，客户端自拼 `stream.mkv` 也照样能播；只是面板下发的地址换了个形态。
+    `stream.{ext}` 一并认；HLS 源的 `DirectStreamUrl` 由裸 `stream` 变为 `stream.m3u8`，
+    靠后缀判类型的客户端恢复播放。
 
 ## [1.9.0] - 2026-10-07
 

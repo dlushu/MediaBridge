@@ -54,6 +54,16 @@ function fmt(v) {
   return String(v);
 }
 
+/** 文本前缀 → 级别：面板的失败/警告行约定带符号前缀（叉号 = 失败、警告牌 = 警告），但调用点
+ * 走的是 `console.log`（level 是 `log`），不在「仅错误」过滤里、也不标红。这里按前缀归级，
+ * 免得几十处调用点挨个改。 */
+function levelOf(level, line) {
+  const t = line.replace(/^\s+/, '');
+  if (t.startsWith('✘')) return 'error';
+  if (t.startsWith('⚠')) return 'warn'; /* ⚠️ 是 ⚠ + VS16，startsWith('⚠') 两种都中 */
+  return level;
+}
+
 /** 写入一条（多行值按行拆） */
 function push(level, text) {
   const lines = String(text).split('\n');
@@ -61,7 +71,7 @@ function push(level, text) {
     const line = raw.replace(/\s+$/, '');
     if (!line) continue;
     seq++;
-    buf[pos] = { seq, t: Date.now(), level, text: line.length > MAX_TEXT ? line.slice(0, MAX_TEXT) + '…' : line };
+    buf[pos] = { seq, t: Date.now(), level: levelOf(level, line), text: line.length > MAX_TEXT ? line.slice(0, MAX_TEXT) + '…' : line };
     pos = (pos + 1) % limit;
     if (count < limit) count++;
   }

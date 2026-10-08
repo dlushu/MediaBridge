@@ -1,6 +1,6 @@
 # ADR-0070 `DirectStreamUrl` 去容器后缀：改回裸 `stream`
 
-- 状态：已采纳（对齐真机；收窄 [0062](0062-relative-playback-urls.md) 落地时 `stream.{Container}` 的拼法）
+- 状态：**已被 [0071](0071-direct-stream-url-container-suffix.md) 取代**（裸 `stream` 实测打断靠后缀判类型的客户端，恢复带后缀）
 - 相关：[0062](0062-relative-playback-urls.md)（播放地址给相对路径）· [0007](0007-emby-dto-shape.md)（Emby 响应按真机 DTO 形状对齐）·
   [emby-compat.md](../emby-compat.md) · [11-items-playbackinfo](../emby-realdevice/11-items-playbackinfo.md) ·
   [service.js](../../server/modules/emby/service.js)（`directStreamUrl`）

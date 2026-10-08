@@ -3054,12 +3054,12 @@ function aspectRatioOf(w, h) {
  * **直连播放地址**（`MediaSources[].DirectStreamUrl`）—— 真机**只在 PlaybackInfo 里给**，详情里没有
  * （拿真机同一集 `S05E211` 逐字段对过：详情 27 个字段、PlaybackInfo 28 个，差的就是它）。
  *
- * 形状照真机：`/videos/{id}/stream?MediaSourceId=…&Static=true&api_key=…`。三点刻意：
- *   · **不带容器后缀**：真机（予初Emby 4.9.5.0，电影 `864879` / 剧集 `585872` 两条原文）就是裸
- *     `stream`，即便 `Container='mkv'` 也不拼 `.mkv`；更新的动漫Emby（4.10.1.0）**干脆不返该字段**。
- *     面板此前拼 `stream.{Container}`（→ `stream.mkv` / `stream.hls`），属形态偏离，为对齐真机改回
- *     裸 `stream`（见 ADR-0070）。客户端自拼带后缀（`stream.mkv`）本层照样认 —— 路由正则
- *     `stream(\.[a-z0-9]+)?` 裸后缀都收，两种都能播。
+ * 形状：`/videos/{id}/stream.{容器}?MediaSourceId=…&Static=true&api_key=…`。三点刻意：
+ *   · **带容器后缀**（`hls` 映射成 `m3u8`，见函数体）：曾为对齐真机（予初Emby 4.9.5.0 的
+ *     `DirectStreamUrl` 就是裸 `stream`）去掉过后缀（ADR-0070），实测**打断了一批靠 URL 后缀
+ *     判类型的客户端**（ExoPlayer 系只认 `.m3u8`，裸 `stream` 被当普通文件嗅探 → 播放错误）——
+ *     恢复后缀，取舍见 ADR-0071。裸 `stream` 本层照样认：路由正则 `stream(\.[a-z0-9]+)?`
+ *     两种都收。
  *   · 给**相对路径**（`/videos/...`，与真机一致）—— 客户端把这里给的地址**当相对路径直接拼在
  *     自己的 base 之后**（base 已含 `/emby`，见 server.js 注释）：给绝对 URL 会被再拼一次成
  *     双重地址（`…/emby` + `http://…/api/emby/…`）→ 404。相对路径去掉 `/api/emby` 与 `/emby`
@@ -3070,9 +3070,14 @@ function aspectRatioOf(w, h) {
  *     写进 query 等于没带（拿这个 URL 直接去播就是 401 —— 客户端自己会带头所以看不出来，
  *     但把 URL 交给外部播放器/投屏时就会踩到）。`api_key` 这个 query 形式真机也认。
  */
-function directStreamUrl({ itemId, token, src }) {
+function directStreamUrl({ itemId, token, src, container }) {
+  /* 后缀不照抄 Container：`hls` 是 Emby DTO 的容器枚举值，不是播放器认得的扩展名 ——
+   * ExoPlayer 系按后缀推断类型只认 `.m3u8`（真机的 HLS 拉流地址也是 `*.m3u8`）；
+   * 其余容器（mkv/mp4/…）容器名本身就是扩展名，原样拼。 */
+  const ext = container === 'hls' ? 'm3u8' : container;
+  const file = `stream${ext ? '.' + ext : ''}`;
   return (
-    `/videos/${encodeURIComponent(itemId)}/stream` +
+    `/videos/${encodeURIComponent(itemId)}/${file}` +
     `?MediaSourceId=${encodeURIComponent(src)}&Static=true` +
     (token ? `&api_key=${encodeURIComponent(token)}` : '')
   );
@@ -3237,6 +3242,10 @@ function buildMediaSource({ itemId, line, runtimeTicks, headers = {}, item, subt
       /* `lang` 原样写进 `Language`（契约 §七：BCP-47 风格，面板不解释） */
       Language: s.lang,
       DisplayTitle: s.label || s.lang,
+      /* 外挂字幕不是默认轨/强制轨。`IsDefault` 必须给：严格反序列化的客户端（Yamby）
+       * 把它声明成必填，缺了整条 PlaybackInfo 直接抛 SerializationException */
+      IsDefault: false,
+      IsForced: false,
       IsExternal: true,
       IsTextSubtitleStream: true,
       SupportsExternalStream: true,
@@ -3449,7 +3458,7 @@ async function getPlaybackInfo(itemId, token = '') {
       /* RequiredHttpHeaders 留空：源要求的请求头由**本层**在 Stream 端点里带上，客户端只管拉 */
       RequiredHttpHeaders: {},
       /* 直连播放地址：**只在这里给**（真机详情里没有它 —— 见 `directStreamUrl` 的注释） */
-      DirectStreamUrl: directStreamUrl({ itemId, token, src: m.Id }),
+      DirectStreamUrl: directStreamUrl({ itemId, token, src: m.Id, container: m.Container }),
     })
   );
   return {

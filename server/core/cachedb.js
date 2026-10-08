@@ -111,32 +111,58 @@ function createStore({ label, dir, file, tables }) {
     }
 
     fs.mkdirSync(dir, { recursive: true });
-    db = new DatabaseSync(filePath);
+
+    /* ⚠️ 全程用局部变量，**最后一步才赋给 `db`**：建库/建表任何一步抛错都不能留下
+     * 半初始化的句柄 —— 否则下次 `if (db) return db` 直接返回它，报错的会是
+     * "no such table" 这种跟真实原因（多半是 WAL 起不来）毫不相干的误导信息。
+     * （GitHub issue #3：CentOS 7 老内核上 WAL 拿不到 shm → 首抛 disk I/O error，
+     *  之后所有访问变成 no such table。） */
+    const h = new DatabaseSync(filePath);
     try {
       fs.chmodSync(filePath, 0o600);
     } catch {
       /* 平台不支持就算了，不因此起不来 */
     }
 
-    /* 与 `emby.db`（账号，DELETE journal）相反，缓存**用 WAL**：高写入负载要读写并发；
-     * `synchronous = NORMAL` 少一次 fsync/事务 —— 掉电最多丢最近几条缓存，无所谓。 */
-    db.exec('PRAGMA journal_mode = WAL;');
-    db.exec('PRAGMA synchronous = NORMAL;');
-    db.exec('PRAGMA busy_timeout = 5000;');
-
-    for (const t of tables) {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS ${t} (
-          key        TEXT PRIMARY KEY,
-          value      TEXT NOT NULL,
-          bytes      INTEGER NOT NULL,   -- 为「按字节淘汰」记账；SQLite 不能对 TEXT 求和
-          created_at INTEGER NOT NULL,
-          used_at    INTEGER NOT NULL,   -- LRU 依据；读命中时按 USED_REFRESH_MS 节流刷新
-          expires_at INTEGER NOT NULL
+    /* 与 `emby.db`（账号，DELETE journal）相反，缓存**优先用 WAL**：高写入负载要读写并发；
+     * `synchronous = NORMAL` 少一次 fsync/事务 —— 掉电最多丢最近几条缓存，无所谓。
+     * **WAL 起不来就降级 DELETE journal 继续跑**（ADR-0072）：缓存是可丢数据，
+     * 为它让整个功能炸掉不值；降级只丢读写并发收益，对这些小库无所谓。 */
+    try {
+      try {
+        h.exec('PRAGMA journal_mode = WAL;');
+      } catch (e) {
+        console.error(
+          `  ✘ 缓存库 ${filePath} 开 WAL 失败（${(e && e.message) || e}），已降级 DELETE journal 继续跑` +
+          ` —— 多半是数据卷的文件系统不支持 WAL 的共享内存（老内核 overlayfs / NFS / SMB）；` +
+          `若之后写库仍报 disk I/O error，就是卷本身的问题（磁盘满 / 网络盘），请换本地盘挂载`
         );
-        CREATE INDEX IF NOT EXISTS ${t}_expires ON ${t}(expires_at);
-      `);
+        h.exec('PRAGMA journal_mode = DELETE;');
+      }
+      h.exec('PRAGMA synchronous = NORMAL;');
+      h.exec('PRAGMA busy_timeout = 5000;');
+
+      for (const t of tables) {
+        h.exec(`
+          CREATE TABLE IF NOT EXISTS ${t} (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            bytes      INTEGER NOT NULL,   -- 为「按字节淘汰」记账；SQLite 不能对 TEXT 求和
+            created_at INTEGER NOT NULL,
+            used_at    INTEGER NOT NULL,   -- LRU 依据；读命中时按 USED_REFRESH_MS 节流刷新
+            expires_at INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS ${t}_expires ON ${t}(expires_at);
+        `);
+      }
+    } catch (e) {
+      /* 走到这 = 这个库没法用（连 DELETE journal 都建不了：卷只读 / 文件损坏 / 盘满…）：
+       * 关掉句柄、不留脏状态，如实抛原始错 */
+      try { h.close(); } catch { /* 关都关不上就算了，原始错更要紧 */ }
+      throw e;
     }
+
+    db = h;
     return db;
   }
 

@@ -77,7 +77,9 @@
 | [0067](0067-mirror-fallback-sources.md) | 取源候选：内置公共 gh 代理，串行降级到官方直连 | 已采纳（细化 0019「下载地址可配置」的默认值；走代理时校验只防传输损坏，有意为之） |
 | [0068](0068-about-page-embedded-notice.md) | 「关于」页内嵌公告：内容放仓库，面板取回后隔离渲染 | 已采纳 |
 | [0069](0069-brand-graphic-assets.md) | 品牌图形资产：界面内不摆图标，标签页图标与 Emby 默认头像用品牌图 | 已采纳 |
-| [0070](0070-direct-stream-url-bare-stream.md) | `DirectStreamUrl` 去容器后缀：改回裸 `stream`（对齐真机） | 已采纳（收窄 0062 的拼法） |
+| [0070](0070-direct-stream-url-bare-stream.md) | `DirectStreamUrl` 去容器后缀：改回裸 `stream`（对齐真机） | 已被 0071 取代（实测打断靠后缀判类型的客户端） |
+| [0071](0071-direct-stream-url-container-suffix.md) | `DirectStreamUrl` 恢复容器后缀，`hls` 映射为 `m3u8` | 已采纳（取代 0070；能播优先于真机形态对齐） |
+| [0072](0072-cachedb-wal-fallback-delete-journal.md) | 缓存库 WAL 起不来时降级 DELETE journal，开库原子化 | 已采纳 |
 
 ## 新增一条 ADR
 
