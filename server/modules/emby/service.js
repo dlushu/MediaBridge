@@ -28,7 +28,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const zlib = require('zlib'); // 版本 Id 的载荷要压一道（客户端对 URL 长度有硬上限，见 catpawSourceId）
+const zlib = require('zlib'); // 版本 Id 的载荷要压一道（客户端对 URL 长度有硬上限，见 mbpSourceId）
 const metaBridge = require('./meta-bridge');
 const agg = require('../agg/api'); // 聚合层的进程内调用面（原来是打自己的 /api/agg/*，会撞面板门禁 → 见那个文件顶部）
 /* 拉流的**落法内核**（判 302 / 清单中继、清单改写工具）—— 与 agg 的流入口共用同一份，
@@ -1812,7 +1812,7 @@ function itemsQueryBranch(query) {
  *   - `SearchTerm=<词>` → **按名字搜**（元数据插件搜索；SenPlayer 的搜索框走这条）
  *   - `AnyProviderIdEquals={域}.{编号}` → **按外部 id 搜一条**（回一条带本面板 Id 的条目，客户端接着进详情）。
  *     该参数可**逗号分隔多值**，语义是"任一条对上就算"（见 `searchProviderRefs`）：按序逐个试，先命中先返回
- *   - `ParentId=<catpawhome_…>`（本面板发给客户端的媒体库 Id，见 getViews）→ `home.listByQuery` 跑对应插件行
+ *   - `ParentId=<mbphome_…>`（本面板发给客户端的媒体库 Id，见 getViews）→ `home.listByQuery` 跑对应插件行
  *   - 无 `ParentId` 且 `SortBy` 含 `IsFavoriteOrLiked` 的**轮播推荐位** → 路由到插件声明了
  *     `feed` 的行（判据见 `feedOfQuery`），回行内**条目**（见 [ADR-0054]）
  *   - 无 `ParentId` 的**裸列表查询**（只带 `ExcludeItemTypes` / `StartIndex` / `Limit` / `Fields`，
@@ -1957,14 +1957,14 @@ async function getItems(req, requestedId, query) {
   /* token 已在路由层**一律**验过（5-1 对齐真机：无 token 一律 401，不分支路）；
    * **不比对 UserId**（5-2 对齐真机：真机对 Items 只验 token，合法但不存在的 UserId 也照回 200）。 */
 
-  /* 列表数据交给首页模块：它只认自己发出去的库 Id（`catpawhome_…`），其余回 null = 不归它管。
+  /* 列表数据交给首页模块：它只认自己发出去的库 Id（`mbphome_…`），其余回 null = 不归它管。
    * **分页也一起透传**（`StartIndex`/`Limit` 进 `ctx`）—— emby 层**不切片**：
    * 取哪一页是模块的决定，这里只把结果翻译成 Emby 形状。 */
   let got = null;
   try {
     got = await home.listByQuery(effQuery);
   } catch (e) {
-    /* 日志里报**解码后的**「插件/行」，别报 `catpawhome_ZXhh…` 那串 —— 排查时没人愿意手解 base64 */
+    /* 日志里报**解码后的**「插件/行」，别报 `mbphome_ZXhh…` 那串 —— 排查时没人愿意手解 base64 */
     return homeFailure(e, effVid ? `${effVid.pluginId}/${effVid.rowId}` : val('ParentId'));
   }
   if (!got) {
@@ -2628,7 +2628,7 @@ async function getSimilar(itemId, limit) {
  *   ① 元数据（名字 / 简介 / 图片 / 集号…）—— **上游反查**。客户端认的是本面板发出去的 Id，
  *      所以必须回**同一个对象**（形状与列表里那条一致）。
  *   ② 源绑定 —— 用上游的**影视名**，交给聚合层（`agg/api.js` 的 `detail()`，**进程内直调**）搜一遍，
- *      挑同名条目，命中结果落到日志与 `ProviderIds.Catpaw` / `CatpawSource`。
+ *      挑同名条目，命中结果落到日志与 `ProviderIds.MediaBridge` / `MediaBridgeSource`。
  *
  * 实现上尽量不重复组装逻辑：季/集**复用列表实现**（`getSeasons` / `getEpisodes`）再挑出那一条；
  * 剧/影走 `richItemDto()`（rich 版反查）—— 它是详情专用，别和列表项那套混。
@@ -2859,15 +2859,15 @@ async function getItem(itemId) {
   }
 
   /* 源绑定：**每个命中的站都记**（`<源id>/<站点>|<vodId>`，`;` 分隔）—— 客户端不解析它，面板/日志核对用 */
-  found.ProviderIds = Object.assign({}, found.ProviderIds, { Catpaw: bindings.join(';') });
-  /* CatpawSource 是非标准字段（Emby 客户端会忽略）：老字段（单站那几个）取**第一个站**以兼容既有文档
+  found.ProviderIds = Object.assign({}, found.ProviderIds, { MediaBridge: bindings.join(';') });
+  /* MediaBridgeSource 是非标准字段（Emby 客户端会忽略）：老字段（单站那几个）取**第一个站**以兼容既有文档
    * 与面板读取，新增 `Sites` 放**全部命中站**的明细。 */
-  found.CatpawSource = Object.assign({}, siteDigest[0], { Sites: siteDigest });
+  found.MediaBridgeSource = Object.assign({}, siteDigest[0], { Sites: siteDigest });
   /* 有过滤规则时，把「源里多少条 / 留下多少条」一并记进诊断字段（客户端会忽略，面板核对用）。
    * **只有可播类型（集/电影）才算得通**：剧/季根本不会展开版本列表（上面 `if (!isPlayable(...)) continue`），
    * 那种 0 条是设计，不是规则滤的 —— 别把误导写进诊断字段。 */
   if (lfStat && lfStat.raw && isPlayable(found.Type)) {
-    found.CatpawSource.LineFilter = {
+    found.MediaBridgeSource.LineFilter = {
       Pattern: lfStat.raw,
       /* `Total` = **过滤前**源里多少条（聚合层给的那笔账）；`Kept` = 本层最终列了几个版本 */
       Total: lfStat.before,
@@ -3033,9 +3033,9 @@ function aspectRatioOf(w, h) {
  * 一条线路 → 一个 Emby `MediaSource`（**版本**）。
  *
  * 多站之后每条线路都带**站点**：
- *   - `Id` = `catpaw:` + base64url(`<site>:<flag>|<vod>`)（**该站自己的** vodId）—— 客户端播直连时
+ *   - `Id` = `mbp:` + base64url(`<site>:<flag>|<vod>`)（**该站自己的** vodId）—— 客户端播直连时
  *     只回传它，所以站点与 vod 都必须编在里面，且**必须编码**（线路名里的 `#` 被 URL 当锚点吃掉，
- *     见 `catpawSourceId`）；
+ *     见 `mbpSourceId`）；
  *   - `Name` 与视频流 `DisplayTitle` = **`站点标签 · 线路`**（站点完整 `name`，如 `木偶|4K · 夸克原画`）
  *     —— 版本行的标题位就取 `DisplayTitle`
  *     （Rex 实测：缺了它客户端拿 `VideoRange` 拼 "Dolby Vision"，多条版本会一模一样），
@@ -3054,7 +3054,12 @@ function aspectRatioOf(w, h) {
  * **直连播放地址**（`MediaSources[].DirectStreamUrl`）—— 真机**只在 PlaybackInfo 里给**，详情里没有
  * （拿真机同一集 `S05E211` 逐字段对过：详情 27 个字段、PlaybackInfo 28 个，差的就是它）。
  *
- * 形状照真机：`/videos/{id}/stream?MediaSourceId=…&api_key=…&Static=true`。两点刻意：
+ * 形状照真机：`/videos/{id}/stream?MediaSourceId=…&Static=true&api_key=…`。三点刻意：
+ *   · **不带容器后缀**：真机（予初Emby 4.9.5.0，电影 `864879` / 剧集 `585872` 两条原文）就是裸
+ *     `stream`，即便 `Container='mkv'` 也不拼 `.mkv`；更新的动漫Emby（4.10.1.0）**干脆不返该字段**。
+ *     面板此前拼 `stream.{Container}`（→ `stream.mkv` / `stream.hls`），属形态偏离，为对齐真机改回
+ *     裸 `stream`（见 ADR-0070）。客户端自拼带后缀（`stream.mkv`）本层照样认 —— 路由正则
+ *     `stream(\.[a-z0-9]+)?` 裸后缀都收，两种都能播。
  *   · 给**相对路径**（`/videos/...`，与真机一致）—— 客户端把这里给的地址**当相对路径直接拼在
  *     自己的 base 之后**（base 已含 `/emby`，见 server.js 注释）：给绝对 URL 会被再拼一次成
  *     双重地址（`…/emby` + `http://…/api/emby/…`）→ 404。相对路径去掉 `/api/emby` 与 `/emby`
@@ -3065,10 +3070,9 @@ function aspectRatioOf(w, h) {
  *     写进 query 等于没带（拿这个 URL 直接去播就是 401 —— 客户端自己会带头所以看不出来，
  *     但把 URL 交给外部播放器/投屏时就会踩到）。`api_key` 这个 query 形式真机也认。
  */
-function directStreamUrl({ itemId, token, src, container }) {
-  const file = `stream${container ? '.' + container : ''}`;
+function directStreamUrl({ itemId, token, src }) {
   return (
-    `/videos/${encodeURIComponent(itemId)}/${file}` +
+    `/videos/${encodeURIComponent(itemId)}/stream` +
     `?MediaSourceId=${encodeURIComponent(src)}&Static=true` +
     (token ? `&api_key=${encodeURIComponent(token)}` : '')
   );
@@ -3130,7 +3134,7 @@ function buildMediaSource({ itemId, line, runtimeTicks, headers = {}, item, subt
    * 优先用 agg 拼好的 `standardName`（`标题.年份.季集.规格.容器`），没有就退到原始文件名。 */
   const fileName = t.standardName || t.name || `${line.flag}.mkv`;
   /* ⚠️ `Id` / `Path` **不在这里算**：版本 Id 的载荷要承载"流序号 → 字幕 ref"的映射（`s` 字段，
-   * 见 catpawSourceId），得等字幕流建好、拿到各自 `Index` 才算；而每条字幕流的 `DeliveryUrl`
+   * 见 mbpSourceId），得等字幕流建好、拿到各自 `Index` 才算；而每条字幕流的 `DeliveryUrl`
    * 又依赖版本 Id。所以整段次序是：先建 streams（视频/音频/字幕）→ 算 Id → 回填 `Path` / `DeliveryUrl`。 */
   const ms = {
     Name: title,
@@ -3248,7 +3252,7 @@ function buildMediaSource({ itemId, line, runtimeTicks, headers = {}, item, subt
   subTracks.forEach((x) => {
     subMap[String(x.index)] = x.ref;
   });
-  const src = catpawSourceId(t.ref, line.playVia, subMap);
+  const src = mbpSourceId(t.ref, line.playVia, subMap);
   ms.Id = src;
   ms.Path = streamPath(itemId, src, fileName);
   /* 回填每条字幕流的 `DeliveryUrl`（指向字幕内容端点，相对路径）—— 依赖上面算出的版本 Id。 */
@@ -3261,7 +3265,7 @@ function buildMediaSource({ itemId, line, runtimeTicks, headers = {}, item, subt
 /**
  * MediaSource 的 Id：把**源插件编的那个 `ref`** 包一层。
  *
- * 形状：`catpaw:` + **base64url**(deflateRaw(JSON `{r: ref}`))。
+ * 形状：`mbp:` + **base64url**(deflateRaw(JSON `{r: ref}`))。
  *
  * **为什么必须编码**（实测）：客户端把 Id 拼进 query 时，中文它会编码
  * （日志里是 `%E5%A4%B8%E5%85%8B…`），但 **`#` 它不编码** —— 而线路名里就有 `#`（如 `夸克原画#01`），
@@ -3278,7 +3282,7 @@ function buildMediaSource({ itemId, line, runtimeTicks, headers = {}, item, subt
  * **面板不解释 `ref` 的内容**（契约第八节）：里面是什么、怎么换成一个地址，都是源插件的事。
  * 这一层只做三件事：压小、编码成客户端安全的一串、播放时原样交回插件。
  */
-function catpawSourceId(ref, playVia, subs) {
+function mbpSourceId(ref, playVia, subs) {
   const o = { r: String(ref || '') };
   /* 线路级的 `playVia` **跟着 `ref` 一起编进 Id** —— 它决定起播时面板怎么落地址（见 `finishStream`）：
    * `proxy` 的线路客户端带不了鉴权头，得由面板代持中继。缺省 `client` 不写（省长度、也免得老口径漂移）。
@@ -3292,7 +3296,7 @@ function catpawSourceId(ref, playVia, subs) {
   const sMap = subs && typeof subs === 'object' ? subs : null;
   if (sMap && Object.keys(sMap).length) o.s = sMap;
   const payload = JSON.stringify(o);
-  return 'catpaw:' + zlib.deflateRawSync(Buffer.from(payload, 'utf8')).toString('base64url');
+  return 'mbp:' + zlib.deflateRawSync(Buffer.from(payload, 'utf8')).toString('base64url');
 }
 
 /* 拉流方式：**一律 302**（`play.mode` 与「面板代理」那条路一并删掉）。
@@ -3309,23 +3313,23 @@ function catpawSourceId(ref, playVia, subs) {
 /**
  * 拆版本 Id —— 认出来就是 `{ref}`，认不出回 `null`（上层据此报 400，不猜）。
  *
- * 形状只有一种：`catpaw:<base64url(deflateRaw(JSON {r, v?, s?}))>`（见 `catpawSourceId`）。
+ * 形状只有一种：`mbp:<base64url(deflateRaw(JSON {r, v?, s?}))>`（见 `mbpSourceId`）。
  * ⚠️ **旧形状不再认**（多源之前那种 `<源>:<站点>:<线路>|<vod>`，以及只编码不压缩的那一版）：
  * 按 ADR-0034 不留双读分支 —— 客户端手里缓存的旧 Id 会被如实回一句"重新进一次播放页"
  * （客户端进播放页必先问 PlaybackInfo，所以它自会拿到新的）；这正是那条"不为未发布的东西留兼容"的口径。
  */
-function parseCatpawSourceId(src) {
+function parseMbpSourceId(src) {
   const s = String(src || '');
-  if (!s.startsWith('catpaw:')) return null;
-  const plain = inflateText(s.slice('catpaw:'.length));
+  if (!s.startsWith('mbp:')) return null;
+  const plain = inflateText(s.slice('mbp:'.length));
   if (!plain || !plain.startsWith('{')) return null;
   try {
     const o = JSON.parse(plain);
     const ref = String(o.r || '');
     if (!ref) return null;
-    /* `v` 是线路级的落法声明（见 `catpawSourceId`）：缺席 = 老 Id / 缺省 `client`。
+    /* `v` 是线路级的落法声明（见 `mbpSourceId`）：缺席 = 老 Id / 缺省 `client`。
      * 原样带出去交给 `finishStream` 判档，这里不解释、不校验取值（`planStream` 只认 `proxy`）。 */
-    /* `s` = "字幕流序号 → 字幕 ref"的映射（见 `catpawSourceId`）：缺席 = 无字幕 / 老 Id。
+    /* `s` = "字幕流序号 → 字幕 ref"的映射（见 `mbpSourceId`）：缺席 = 无字幕 / 老 Id。
      * 原样带出去，`getSubtitle` 按客户端的 `Index` 取值。 */
     const subs = o.s && typeof o.s === 'object' && !Array.isArray(o.s) ? o.s : {};
     return { ref, playVia: String(o.v || 'client'), subs };
@@ -3359,7 +3363,7 @@ function inflateText(s) {
  * 给**相对路径**（不带 `/api/emby` 前缀，也不带主机）—— 客户端把它当相对路径拼在自己的 base 之后
  * （base 已含 `/emby`），去掉前缀后 base 是 `/emby` 还是 `/api/emby` 都能命中（同 `directStreamUrl`）。
  *
- *   - `{token}` = base64url(版本 Id)（**整条 Id 原样编进来**：Id 自身已是 `catpaw:` + base64url，
+ *   - `{token}` = base64url(版本 Id)（**整条 Id 原样编进来**：Id 自身已是 `mbp:` + base64url，
  *     这里再编一层只为让路径段不含 `/`；两层都解得出，token 长一点无所谓）
  *     **必须是"解码后也不含 `/`"的编码**：客户端会把 Path 解码后取「最后一个 `/` 之后」当版本行的
  *     副标题 —— 明文 vod 里的 `…/vod/detail/id/8471.html` 就是这么把副标题变成 `8471.html` 的
@@ -3382,7 +3386,7 @@ function streamPath(itemId, src, fileName) {
 function decodeSourceToken(token) {
   try {
     const s = Buffer.from(String(token || ''), 'base64url').toString('utf8');
-    return s.startsWith('catpaw:') ? s : '';
+    return s.startsWith('mbp:') ? s : '';
   } catch {
     return '';
   }
@@ -3445,7 +3449,7 @@ async function getPlaybackInfo(itemId, token = '') {
       /* RequiredHttpHeaders 留空：源要求的请求头由**本层**在 Stream 端点里带上，客户端只管拉 */
       RequiredHttpHeaders: {},
       /* 直连播放地址：**只在这里给**（真机详情里没有它 —— 见 `directStreamUrl` 的注释） */
-      DirectStreamUrl: directStreamUrl({ itemId, token, src: m.Id, container: m.Container }),
+      DirectStreamUrl: directStreamUrl({ itemId, token, src: m.Id }),
     })
   );
   return {
@@ -3478,7 +3482,7 @@ async function getSubtitle(itemId, src, index, format) {
     return { status: 404, body: { error: '只有「集」和「电影」有字幕' }, log: `Id 不是集/电影 → 404：${itemId}` };
   }
 
-  const parsed = parseCatpawSourceId(src);
+  const parsed = parseMbpSourceId(src);
   if (!parsed) {
     /* 与拉流同口径：认不出多半是旧版客户端缓存下来的版本 Id —— 让它重进一次播放页。 */
     return {
@@ -3557,7 +3561,7 @@ async function resolveStream(itemId, src, req) {
     return { status: 404, body: { error: '只有「集」和「电影」能播' }, log: `Id 不是集/电影 → 404：${itemId}` };
   }
 
-  const parsed = parseCatpawSourceId(src);
+  const parsed = parseMbpSourceId(src);
   if (!parsed) {
     /* 认不出多半是**旧版客户端缓存下来的**版本 Id（这一版换了 Id 的载荷，按 ADR-0034 不留双读）。
      * 客户端进播放页必先问 PlaybackInfo，所以如实让它重取一次就好。 */
@@ -3594,7 +3598,7 @@ async function resolveStream(itemId, src, req) {
  * 搬进了源插件 —— 面板已经不知道实例端口，插件给回来的就是最终地址。
  *
  * 落法由**内核**判（`../agg/stream.js` 的 `planStream`，四档），`playVia` 从版本 Id 载荷里取
- * （编进 Id 时读的是 `detail.lines[].playVia`，见 `catpawSourceId`）：
+ * （编进 Id 时读的是 `detail.lines[].playVia`，见 `mbpSourceId`）：
  *   · `client` 非清单 → **302**（字节全在源与客户端之间跑）；
  *   · `client` 清单   → **200 清单中继**（相对补绝对，ADR-0040）；
  *   · `proxy` 非清单  → **面板代持请求头中继**（字节经面板，Range 透传，ADR-0042）；
@@ -3763,7 +3767,7 @@ function baseItem(f) {
    * 所以 0 是真话。（真机的**剧集**条目不给这个字段，给了也无害 —— 真机自己都不保证有。） */
   item.SpecialFeatureCount = 0;
   item.DisplayPreferencesId = stableHash('dp|' + f.id);
-  item.PresentationUniqueKey = `p-catpaw-${item.Type}-${stableHash(f.id)}`;
+  item.PresentationUniqueKey = `p-mbp-${item.Type}-${stableHash(f.id)}`;
   if (f.originalTitle !== undefined) item.OriginalTitle = f.originalTitle;
   if (f.genres !== undefined) item.Genres = f.genres;
   if (f.childCount !== undefined) item.ChildCount = f.childCount;
@@ -3993,8 +3997,8 @@ module.exports = {
   getPlaybackInfo,
   getSubtitle,
   resolveStream,
-  catpawSourceId,
-  parseCatpawSourceId,
+  mbpSourceId,
+  parseMbpSourceId,
   streamPath,
   decodeSourceToken,
   baseItem,

@@ -6,6 +6,10 @@
   [0039](0039-compressed-source-id.md)（版本 Id 载荷形状）、
   [0006](0006-redirect-for-playback.md)（302 基线）
 
+> 改名注记：本条落码时的 `catpawSourceId` / `parseCatpawSourceId` 与前缀 `catpaw:`，已随「品牌净化」改名为
+> `mbpSourceId` / `parseMbpSourceId` 与前缀 `mbp:`。本条决策（`playVia` 编进版本 Id）不变，仅标识改名（契约变更记录见
+> [docs/emby-compat.md](../emby-compat.md)）。
+
 ## 背景
 
 [0042](0042-auth-line-byte-relay.md) 给 agg 流端点（`GET /api/agg/stream`，面给出口插件用的外部播放器）

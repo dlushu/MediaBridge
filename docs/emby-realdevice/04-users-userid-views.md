@@ -11,7 +11,7 @@
 {
   "Name": "动画电影",                    // 库名
   "ServerId": "…",                       // 服务器 Id
-  "Id": "4416",                          // 库 Id（真机是数字；面板是 catpawhome_…）
+  "Id": "4416",                          // 库 Id（真机是数字；面板是 mbphome_…）
   "Guid": "c825336c…",                   // 全局唯一标识
   "Etag": "36d39bf5…",                   // 内容指纹（缓存键；真机多个库有重复值）
   "DateCreated": "2025-11-17T14:26:10.0000000Z",  // 建库时间
@@ -41,7 +41,7 @@
 |---|---|---|---|---|
 | 顶层 `Items`/`TotalRecordCount` | 库列表与总数 | 有 | 有 | 一致 |
 | `Name`/`ServerId`/`Type`/`IsFolder` | 库名、服务器 Id、固定 CollectionFolder | 有 | 有 | 一致 |
-| `Id` | 库标识（客户端拿它取 `Items?ParentId=`） | 数字 `"4416"` | `catpawhome_…` | 不能模拟（不透明标识，客户端只当字符串） |
+| `Id` | 库标识（客户端拿它取 `Items?ParentId=`） | 数字 `"4416"` | `mbphome_…` | 不能模拟（不透明标识，客户端只当字符串）；**品牌净化改名 `catpawhome_` → `mbphome_` 已落码、未复测** |
 | `Guid`/`PresentationUniqueKey`/`DisplayPreferencesId` | 缓存/去重/显示偏好键，真机三者同值 | 真 GUID | 稳定派生 32hex（三者同值，对齐） | 一致（形状与关系对齐，值不同属正常） |
 | `Etag` | 库内容指纹（缓存失效依据） | 有（真机多库重复同值） | 稳定派生 | 一致（用途对齐） |
 | `DateCreated` | 建库时间 | 真实时间 | `0001-01-01…` 零值占位 | 不能模拟（无"建库"动作；非法日期会炸客户端解析，见 service 注释） |

@@ -6,6 +6,10 @@
   [0022](0022-movie-all-play-items.md)（版本 Id 载荷形状的来历，其形状描述随本条目作废） ·
   [service.js](../../server/modules/emby/service.js)（`catpawSourceId` / `parseCatpawSourceId` / `inflateText`）
 
+> 改名注记：本条落码时的 `catpawSourceId` / `parseCatpawSourceId` 与前缀 `catpaw:`，已随「品牌净化」改名为
+> `mbpSourceId` / `parseMbpSourceId` 与前缀 `mbp:`。压缩这一决策本身不变，仅标识改名（契约变更记录见
+> [docs/emby-compat.md](../emby-compat.md)）。
+
 ## 背景
 
 同一个视频，Rex 能播、SenPlayer 播不了。面板日志给到的原始请求是解开这条的口子：

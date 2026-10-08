@@ -40,7 +40,7 @@ const MIN_LEN = 6;
  */
 const DEFAULT_SESSION_MIN = 15;
 const MAX_SESSION_MIN = 30 * 24 * 60;
-const COOKIE = 'catpaw_panel';
+const COOKIE = 'mbp_panel';
 /** 失败节流：连续 5 次 → 锁 60 秒（同一 IP） */
 const MAX_FAILS = 5;
 const LOCK_MS = 60 * 1000;

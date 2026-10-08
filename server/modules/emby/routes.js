@@ -448,7 +448,7 @@ module.exports = function routes(r) {
      * 拼在自己的 base 之后（base 已含 `/emby`），所以**不需要**把本请求的 Host / 协议传进去。 */
     const out = await service.getItem(params.itemId);
     service.applyUserData(out, params.userId, req);
-    log.logResult(req, `条目详情 Users/…/Items/${params.itemId}`, out, q + (out.body && out.body.CatpawSource ? " 源=" + out.body.CatpawSource.Site : ""));
+    log.logResult(req, `条目详情 Users/…/Items/${params.itemId}`, out, q + (out.body && out.body.MediaBridgeSource ? " 源=" + out.body.MediaBridgeSource.Site : ""));
     return sendJson(res, out.status, out.body);
   });
 
@@ -489,7 +489,7 @@ module.exports = function routes(r) {
     if (!src) {
       console.log(`  ✘ emby 拉流 Items/${params.itemId}/Stream → HTTP 400  token 认不出：${params.token}${log.clientTag(req)}`);
       return sendJson(res, 400, {
-        error: '路径里的 token 认不出（应是 base64url 的、以 catpaw: 开头的版本 Id）',
+        error: '路径里的 token 认不出（应是 base64url 的、以 mbp: 开头的版本 Id）',
       });
     }
     const out = await service.resolveStream(params.itemId, src, req);
@@ -516,7 +516,7 @@ module.exports = function routes(r) {
    *   `GET /videos/{ItemId}/stream.mkv?Static=true&MediaSourceId=<版本 Id>&PlaySessionId=…&api_key=…`
    * （实测日志 emby#39~#45），而**不是**上面那条 Path。缺了它播放一律 501，客户端只会反复重试。
    *
-   * `MediaSourceId` 自带站点/线路/vod（**压缩后 base64url 编在 Id 里**，见 service.catpawSourceId），所以这里没有额外参数；
+   * `MediaSourceId` 自带站点/线路/vod（**压缩后 base64url 编在 Id 里**，见 service.mbpSourceId），所以这里没有额外参数；
    * `Static=true` 表示要直连（不转码），与一律 302 的语义一致。
    * `:file` 只认 `stream` / `stream.<扩展名>`（后缀来自 `MediaSource.Container`）；`original.mkv` 之类
    * 没在任何日志里出现过，仍按「未实现」记日志 + 501，不提前猜。

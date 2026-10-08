@@ -16,7 +16,7 @@
 于是发出去的是双重地址：
 
 ```
-http://100.64.0.3:8092/emby   +   http://100.64.0.3:8092/api/emby/videos/{ItemId}/stream.mp4?…
+http://<面板主机>:<端口>/emby   +   http://<面板主机>:<端口>/api/emby/videos/{ItemId}/stream.mp4?…
 ```
 
 实例端口把路径 `normalize` 之后（见 [listener.js](../../server/modules/emby/listener.js) / [server.js](../../server.js)），

@@ -622,7 +622,7 @@ function srcTabs(groups, chosenSet) {
 
   for (const [src, sites] of groups) {
     const on = sites.filter((s) => chosenSet.has(sid(s.source, s.key))).length;
-    /* 括号里只写插件 id，不带实例段：source 形如 "catpaw-resolve/s1"，"/s1" 是实例坐标、
+    /* 括号里只写插件 id，不带实例段：source 形如 "<插件id>/<实例段>"，实例段是实例坐标、
        对挑选站点没有信息量，写上反而让页签变长 */
     const name = `${sites[0].sourceName || src}（${src.split('/')[0]}）`;
     const tab = el('button', {
@@ -704,7 +704,7 @@ function srcGroup(src, sites, chosenSet, labelText) {
  *
  * 只认源在站点清单里申报的 `directLines`：true = 搜索结果直接带线路（一层式）；
  * 不申报 / false = 候选不带线路、要再取一次详情（两层式）。
- * 老版猫爪（< 1.0.5）没这个字段，会暂时都显示两层式，更新后即正常 —— 不再读
+ * 早先版本的源插件没申报这个字段，会暂时都显示两层式，更新插件后即正常 —— 不再读
  * filterable / indexs 这类适配器内部字段。
  */
 function layerCell(s) {

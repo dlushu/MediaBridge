@@ -602,7 +602,7 @@ function variantLabel(fullName) {
 /**
  * 取一个站的详情（source = 它所属的源）。
  *
- * ⚠️ **线路与选集的解析已经搬进源插件**（`$$$` / `#` / `$` 是猫爪源自己的约定，见
+ * ⚠️ **线路与选集的解析已经搬进源插件**（那套编码是源插件自己的约定，见
  * docs/plugin-migration-plan.md 批次 7）：这一层只把结构化结果接住，再做**面板自己那半件事** ——
  * 把集名里源的规格标注（容器 / 分辨率 / 编码 / 体积）解析出来挂在 target/items 上，
  * 消费方（emby 层）要用它填 MediaSource / MediaStreams。那是"填 Emby DTO"的知识，归面板。

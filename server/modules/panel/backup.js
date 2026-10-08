@@ -66,7 +66,7 @@ function exportAll() {
   const contentBytes = entries.reduce((n, e) => n + e.data.length, 0);
   const exportedAt = new Date().toISOString();
   const manifest = {
-    service: 'catpaw-panel',
+    service: 'mbp-panel',
     kind: 'panel-data-backup',
     version: String(pkg.version || ''),
     exportedAt,
@@ -99,7 +99,7 @@ function restore(buffer) {
   } catch {
     meta = null;
   }
-  if (!meta || meta.service !== 'catpaw-panel') throw new Error('这个 zip 不是面板的数据备份（manifest 对不上）');
+  if (!meta || meta.service !== 'mbp-panel') throw new Error('这个 zip 不是面板的数据备份（manifest 对不上）');
 
   const staging = path.join(DATA_DIR, `.restore-${process.pid}-${Date.now()}`);
   fs.rmSync(staging, { recursive: true, force: true });

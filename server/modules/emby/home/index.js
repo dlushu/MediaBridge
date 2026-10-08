@@ -11,7 +11,7 @@
  *   · 取行内容：问插件的 `run` 动作（分页原样透传，切不切片是插件的事）
  *   · 参数、缓存、取数用的 token：全是插件自己的事（契约第十/十一节）
  * 这一层只剩两件**面板才知道**的事：
- *   ① 媒体库 Id 的形状（`catpawhome_` + base64url，见 `viewId`）；
+ *   ① 媒体库 Id 的形状（`mbphome_` + base64url，见 `viewId`）；
  *   ② 条目归一化（子进程里跑着插件代码，不该由它决定进缓存什么）。
  *
  * ⚠️ 快照是**异步**刷新的（`rows` 是插件动作），而 `enabledRows` / `rowByFeed` /
@@ -129,13 +129,13 @@ async function warmHome() {
 /**
  * 首页插件的一行 → Emby 的一个媒体库（`Users/{id}/Views` 里的 `CollectionFolder`）。
  *
- * Id = `catpawhome_` + base64url(`<插件id>|<行id>`)：
+ * Id = `mbphome_` + base64url(`<插件id>|<行id>`)：
  *   - **稳定**：插件行不变则 Id 不变 —— 客户端拿它当主键缓存，飘了「已看」就丢；
  *   - **必须整体编码**：插件 id 与行 id 都允许 `.`/`_`/`-`，用分隔符硬拼根本没法可靠反解；
  *     而 base64url 的字符集只有 `[A-Za-z0-9_-]`，URL 安全（不会像 `#` 那样被客户端当锚点吃掉）；
  *   - 与条目 Id 前缀天然不冲突：`parseItemId` 认不出它，所以它只属于 Views。
  */
-const VIEW_PREFIX = 'catpawhome_';
+const VIEW_PREFIX = 'mbphome_';
 const PLUGIN_ID_RE = /^[a-z][a-z0-9._-]{1,63}$/i;
 const ROW_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 
@@ -311,15 +311,11 @@ function normalizeItem(it) {
     }
     if (Object.keys(p).length) out.providerIds = p;
   }
-  /* 片源定位坐标（可选）：`{source?, site, vodId}` —— 拿着它能跳过再搜索直接要详情。
-   * 规范字段名是 `sourceLoc`；`catpaw` 是旧字段名（品牌净化前的遗留），
-   * 老版本首页插件可能还在发，过渡期**读新也读旧、对外只出新字段**。 */
+  /* 片源定位坐标（可选）：`{source?, site, vodId}` —— 拿着它能跳过再搜索直接要详情。 */
   const loc =
     it.sourceLoc && typeof it.sourceLoc === 'object' && !Array.isArray(it.sourceLoc)
       ? it.sourceLoc
-      : it.catpaw && typeof it.catpaw === 'object' && !Array.isArray(it.catpaw)
-        ? it.catpaw
-        : null;
+      : null;
   if (loc) {
     const source = String(loc.source || '').trim();
     const site = String(loc.site || '').trim();
@@ -374,7 +370,7 @@ function fail(code, message) {
 /**
  * 把一条 Emby 列表查询路由到某个插件行 —— **列表数据由首页插件决定，emby 层只调这一个口子**。
  *
- * 现在只认 `ParentId=<catpawhome_…>`（= 本层发给客户端的某个媒体库，见 `viewId`）；
+ * 现在只认 `ParentId=<mbphome_…>`（= 本层发给客户端的某个媒体库，见 `viewId`）；
  * 其余查询回 `null` =「不归本模块管」，由 emby 层如实回空。
  *
  * **分页是原样透传的**：客户端的 `StartIndex` / `Limit` 直接进插件动作，
