@@ -52,6 +52,7 @@ server/core/              基础设施，不认识任何业务
   logbus.js               日志总线：包装 console，透传 stdout 的同时在内存里留一份环形缓冲（面板「日志」页）
   auth.js                 面板门禁：单密码 + 会话签名
   cachedb.js              缓存通用设施：createStore（一库一句柄）+ TTL + 按字节 LRU + 统计/清空
+  mirrors.js              GitHub 取源候选：公共 gh 代理前缀 + 单次请求超时（面板更新与插件库共用，见 ADR-0067）
 server/modules/
   plugin/                 8 文件   /api/plugins/*
     index.js              模块清单（拉起启用中的插件、退出停全部）

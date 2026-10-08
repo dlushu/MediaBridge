@@ -11,10 +11,15 @@
  *   · 清单缓存 60 秒，失败**不缓存**；取不到时**不抛**，把原因交给调用方（页面内联显示）
  *   · 支持 `http(s)://` 与本地路径（内网镜像 / 离线核对时用得上）
  *
- * ⚠️ **不跨模块 require**（分层见 docs/adr/0001）：面板更新那边的小工具（`fetchBytes` /
- * `compareVersion`）在那边是模块私有的，这边各留一份小的，不把模块之间连起来。
+ * 取源按候选顺序**串行降级**（内置公共 gh 代理 → `raw.githubusercontent.com` 直连）：
+ * 候选表与超时来自 `core/mirrors`（决策见 docs/adr/0067-mirror-fallback-sources.md，与面板更新共用一份）。
+ * 显式设了 `PLUGIN_INDEX_URL` / `PLUGIN_SOURCE_URL` 就是唯一地址，不再套镜像前缀。
+ *
+ * ⚠️ **不跨模块 require**（分层见 docs/adr/0001）：面板更新那边的小工具在那边是模块私有的，
+ * 这边各留一份小的 —— 但 `core/` 是共用基础设施，候选表放那儿两边一起用。
  */
 const fs = require('fs');
+const { withMirrors, fetchOnce } = require('../../core/mirrors');
 const contract = require('./contract');
 const store = require('./store');
 
@@ -36,16 +41,17 @@ const CHECK_TTL_MS = 60 * 1000;
 
 const raw = (p) => `https://raw.githubusercontent.com/${LIBRARY_REPO}/main/${p}`;
 
-/** 清单地址（覆盖项给镜像/内网用） */
-const indexUrl = () => String(process.env.PLUGIN_INDEX_URL || '').trim() || raw(INDEX_NAME);
+/** 清单的候选地址表：显式设了 `PLUGIN_INDEX_URL` 就是唯一地址，否则走镜像候选 */
+function indexCandidates() {
+  const tpl = String(process.env.PLUGIN_INDEX_URL || '').trim();
+  return tpl ? [tpl] : withMirrors(raw(INDEX_NAME));
+}
 
-/**
- * 包地址：默认走仓库内的相对路径（`raw.githubusercontent.com` 直取），
- * `PLUGIN_SOURCE_URL` 可覆盖，占位符 `{repo}` `{path}` `{type}` `{id}` `{version}`。
- */
-function sourceUrlOf(entry) {
-  const tpl = String(process.env.PLUGIN_SOURCE_URL || '').trim();
-  if (!tpl) return raw(String(entry.path || ''));
+/** 清单的主地址（对外展示与排障用：候选表的第一条） */
+const indexUrl = () => indexCandidates()[0];
+
+/** 渲染一个地址模板（占位符 `{repo}` `{path}` `{type}` `{id}` `{version}`） */
+function renderSource(tpl, entry) {
   return tpl
     .replace(/\{repo\}/g, LIBRARY_REPO)
     .replace(/\{path\}/g, String(entry.path || ''))
@@ -54,16 +60,44 @@ function sourceUrlOf(entry) {
     .replace(/\{version\}/g, String(entry.version || ''));
 }
 
-/** 取字节：`http(s)://` 走网络（跟随跳转），其余当本地路径读（与 update.js 的 fetchBytes 同款） */
+/**
+ * 包地址的候选表：默认走仓库内的相对路径（`raw.githubusercontent.com` 直取）+ 镜像前缀；
+ * `PLUGIN_SOURCE_URL` 可覆盖（覆盖即唯一地址，占位符见 `renderSource`）。
+ */
+function sourceCandidates(entry) {
+  const tpl = String(process.env.PLUGIN_SOURCE_URL || '').trim();
+  if (tpl) return [renderSource(tpl, entry)];
+  return withMirrors(raw(String(entry.path || '')));
+}
+
+/** 包的主地址（对外展示与排障用：候选表的第一条） */
+const sourceUrlOf = (entry) => sourceCandidates(entry)[0];
+
+/** 取字节：`http(s)://` 走网络（跟随跳转、带超时），其余当本地路径读（与 update.js 的 fetchBytes 同款） */
 async function fetchBytes(url, { what }) {
   if (!/^https?:\/\//i.test(url)) {
     const p = url.replace(/^file:\/\//, '');
     if (!fs.existsSync(p)) throw new Error(`${what} 不存在：${p}`);
     return fs.readFileSync(p);
   }
-  const res = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'media-bridge-panel' } });
+  const res = await fetchOnce(url, { redirect: 'follow', headers: { 'user-agent': 'media-bridge-panel' } });
   if (!res.ok) throw new Error(`${what} 下载失败：HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
+}
+
+/** 沿候选表取第一份取到的字节（串行降级），并把实际取胜的地址带回去 */
+async function fetchFirst(candidates, { what }) {
+  const errors = [];
+  for (const url of candidates) {
+    try {
+      return { buf: await fetchBytes(url, { what }), url };
+    } catch (e) {
+      const why = (e && e.message) || String(e);
+      errors.push(`${url}：${why}`);
+      console.log(`  · 插件库：${url} 取源失败（${why}），换下一个`);
+    }
+  }
+  throw new Error(`${what} 取不到（已试 ${candidates.length} 个地址）：${errors.join('；')}`);
 }
 
 /** 版本比大小（只比三段数字，够用；与 update.js 那份口径一致） */
@@ -109,7 +143,7 @@ function checkEntry(x) {
 async function fetchIndex({ force = false } = {}) {
   const now = Date.now();
   if (!force && cache.value && now - cache.at < CHECK_TTL_MS) return cache.value;
-  const buf = await fetchBytes(indexUrl(), { what: `插件清单 ${INDEX_NAME}` });
+  const buf = (await fetchFirst(indexCandidates(), { what: `插件清单 ${INDEX_NAME}` })).buf;
   let raw0;
   try {
     raw0 = JSON.parse(buf.toString('utf8'));
@@ -195,8 +229,7 @@ async function find(id, { type = '', version = '' } = {}) {
  * 手动上传那条路是同一个关卡，不重复实现一遍。
  */
 async function download(entry) {
-  const url = sourceUrlOf(entry);
-  const buf = await fetchBytes(url, { what: `插件包 ${entry.id}-${entry.version}` });
+  const { buf, url } = await fetchFirst(sourceCandidates(entry), { what: `插件包 ${entry.id}-${entry.version}` });
   return { buf, url, bytes: buf.length };
 }
 

@@ -35,10 +35,11 @@
 | POST | `/api/auth/login` | 登录（单密码） |
 | POST | `/api/auth/logout` | 退出登录 |
 | POST | `/api/auth/password` | 改密码（旧会话立刻全部失效） |
-| GET | `/api/meta` | 服务自述：`{service:"catpaw-panel", version, node, modules}`；外部可据此确认一个地址是否为本面板 |
+| GET | `/api/meta` | 服务自述：`{service:"mbp-panel", version, node, modules}`；外部可据此确认一个地址是否为本面板 |
 | GET | `/api/modules` | 模块总览：每个模块的 `apiPrefix`、`upstream` 与当前 `upstreamUrl` |
 | GET/PUT/DELETE | `/api/modules/:id/settings` | 读写/重置某模块的设置（新增模块不需要改动此端点） |
 | GET | `/api/panel/info` | 版本、Node、数据目录、模块列表，以及**仓库地址**（`repo` / `repoUrl` —— 面板「设置 → 关于」与 Release 链接用它，唯一来源是 `panel/update.js` 的 `REPO`，`APP_REPO` 可覆盖） |
+| GET | `/api/panel/notice` | 「设置 → 关于」页内嵌的**公告**内容：回 `{html, url, error?}`。`html` 取自仓库根目录的 `notice.html`（默认 `https://raw.githubusercontent.com/<repo>/main/notice.html`，经镜像候选取回，见 [ADR-0068](adr/0068-about-page-embedded-notice.md)）；**取不到 / 内容为空都回空串**，前端据此隐藏整张卡。带 5 分钟缓存；`PANEL_NOTICE_URL` 可覆盖取回地址（显式给出时不套镜像前缀；置 `off` / `none` / `-` 关闭） |
 | GET | `/api/panel/backup` | 导出**数据备份**：回一份 zip 字节（`Content-Type: application/zip`），含设置、模板、插件（包本体 + 插件数据）、Emby 账号与播放进度；**不含**缓存与应用代码 `app/`（`cache.db` 连同它的 `-wal`/`-shm` 旁文件一起排除）。摘要放在 `X-Backup-*` 响应头：`X-Backup-Files`（文件数）/ `X-Backup-Size`（**包的实际字节数**，不是内容未压缩字节和）/ `X-Backup-Exported-At`；文件名前缀取品牌短标识（`branding.slug`） |
 | POST | `/api/panel/restore` | 用备份 zip 还原：请求体是**原始二进制**（`Content-Type: application/zip`）。解包校验 `manifest.json` 后把顶层项逐个覆盖回 `DATA_DIR`，还原后需重启面板生效 |
 | GET/DELETE | `/api/panel/cache` | 看面板侧两份缓存的用量 / 清空（线路结果与图片索引） |
@@ -52,7 +53,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/plugins` | 插件清单：每个插件的类型 / id / 版本 / 域 / 启用状态 / 运行状态 / pid / 动作 / 重启次数 / 已跑时长 / 来源（`library` 从插件库装的，`manual` 手动上传的），另带 `types`。**不含**任何"随包发行"的内置插件 |
-| GET | `/api/plugins/library` | **插件库**：从插件仓库拉清单（`?refresh=1` 绕过 60 秒缓存），逐条标出 `installed` / `installedVersion` / `installedOrigin` / `hasUpdate` / `sourceUrl`。拉不到不抛，把原因写进 `error` |
+| GET | `/api/plugins/library` | **插件库**：从插件仓库拉清单（`?refresh=1` 绕过 60 秒缓存），逐条标出 `installed` / `installedVersion` / `installedOrigin` / `hasUpdate` / `sourceUrl`（**首选取包地址**，实装可能经 `APP_MIRRORS` 镜像候选，见 [ADR-0067](adr/0067-mirror-fallback-sources.md)）。拉不到不抛，把原因写进 `error` |
 | POST | `/api/plugins/library/install` | **从插件库装**：`{type, id, version?, enable?}` —— 按清单取包，走下面同一套两道校验 |
 | POST | `/api/plugins/install` | 装一个本地包（`tar.gz` 的 base64 + 可选的包 md5；包里 `plugin.json` 声明了 `files` 就逐文件核对）。任一道对不上 → **400** |
 | DELETE | `/api/plugins/:type/:id` | 卸载：停进程、删插件目录（含它自己的 `data/`） |
@@ -144,10 +145,10 @@ emby 层直接 `require` 该模块而**不经过 HTTP**（原因见 [ARCHITECTUR
 {
   "wd": "斗破苍穹", "page": "1", "elapsedMs": 1812,
   "sites": [                       // 每项：站点身份 + 该站原样输出
-    { "source": "catpaw", "key": "nodejs_muou",
+    { "source": "<源插件id>", "key": "nodejs_muou",
       "name": "木偶|4K", "api": "/spider/muou/3", "ok": true, "ms": 803,
       "data": { "page": 1, "pagecount": 1, "list": [ /* 站源原样条目 */ ] } },
-    { "source": "catpaw", "key": "nodejs_slow",
+    { "source": "<源插件id>", "key": "nodejs_slow",
       "name": "示例|慢", "api": "/spider/slow/3", "ok": false, "ms": 15000, "error": "超时(15000ms)" }
   ],
   "stats": { "requested": 3, "ok": 2, "failed": 1, "empty": 0,

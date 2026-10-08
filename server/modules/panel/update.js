@@ -7,6 +7,9 @@
  * 见 docs/adr/0021-update-replaces-app-dir.md）。
  * 查版本结果缓存 60 秒，避免频繁刷新把 GitHub API 打满。
  *
+ * 取源地址按候选顺序**串行降级**（内置公共 gh 代理 → 官方直连）：候选表与超时来自 `core/mirrors`
+ * （决策见 docs/adr/0067-mirror-fallback-sources.md），插件库那边共用同一份。
+ *
  * ⚠️ **目录布局、包名、校验文件格式必须与容器的引导脚本（`docker/entrypoint.js`）保持一致** ——
  *    两者是同一份约定的两端（一边负责首次安装，一边负责后续更新），改动必须同步。
  *
@@ -24,6 +27,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFileSync, spawn } = require('child_process');
 const { DATA_DIR } = require('../../core/paths');
+const { mirrorPrefixes, withMirrors, fetchOnce } = require('../../core/mirrors');
 const pkg = require('../../../package.json');
 
 /** 应用代码安装根目录（与 docker/entrypoint.js 的 APP_ROOT 一致） */
@@ -31,7 +35,7 @@ const APP_ROOT = path.join(DATA_DIR, 'app');
 const CURRENT_FILE = path.join(APP_ROOT, 'current.json');
 const RESTART_FILE = path.join(APP_ROOT, '.restart');
 
-const REPO = String(process.env.APP_REPO || 'dlushu/media-bridge-panel').trim();
+const REPO = String(process.env.APP_REPO || 'dlushu/MediaBridge').trim();
 
 /** 解包后必须存在的文件；缺任何一个都视为坏包（与引导脚本同一份清单） */
 const REQUIRED = ['server.js', 'package.json', 'server/core/paths.js', 'public/index.html'];
@@ -211,6 +215,8 @@ function pruneOnBoot({ delayMs = PRUNE_DELAY_MS } = {}) {
 
 let checkCache = { at: 0, value: null };
 
+/* -------------------------------------------------------- 取源候选（串行降级） */
+
 function renderTemplate(tpl, { version, name }) {
   return String(tpl)
     .replace(/\{repo\}/g, REPO)
@@ -219,16 +225,28 @@ function renderTemplate(tpl, { version, name }) {
     .replace(/\{name\}/g, name);
 }
 
-/** 该版本包的下载地址：默认走 GitHub Release 资产，`APP_SOURCE_URL` 可覆盖（镜像/代理/本地路径） */
-function sourceUrlOf(version, name = `media-bridge-panel-${version}.tar.gz`) {
-  const tpl = String(process.env.APP_SOURCE_URL || '').trim();
-  return tpl ? renderTemplate(tpl, { version, name }) : `https://github.com/${REPO}/releases/download/v${version}/${name}`;
+/**
+ * 某版本包的候选地址表（有序，官方直连恒为最后兜底）。
+ * 显式设了 `APP_SOURCE_URL` 就是**唯一**地址，不再套镜像前缀（自己指哪打哪）。
+ */
+function sourceCandidates(version, name = `media-bridge-panel-${version}.tar.gz`) {
+  const srcTpl = String(process.env.APP_SOURCE_URL || '').trim();
+  const sumTpl = String(process.env.APP_CHECKSUM_URL || '').trim();
+  if (srcTpl) {
+    const src = renderTemplate(srcTpl, { version, name });
+    return [{ src, sum: sumTpl ? renderTemplate(sumTpl, { version, name }) : `${src}.sha256` }];
+  }
+  const base = `https://github.com/${REPO}/releases/download/v${version}/${name}`;
+  const baseSum = sumTpl ? renderTemplate(sumTpl, { version, name }) : `${base}.sha256`;
+  /* 包体与 .sha256 套同一批前缀：走镜像时两者同源（校验退化为只防传输损坏，见 ADR-0067） */
+  const list = mirrorPrefixes().map((p) => ({ src: `${p}/${base}`, sum: `${p}/${baseSum}` }));
+  list.push({ src: base, sum: baseSum });
+  return list;
 }
 
-function checksumUrlOf(version, name) {
-  const tpl = String(process.env.APP_CHECKSUM_URL || '').trim();
-  const src = sourceUrlOf(version, name);
-  return tpl ? renderTemplate(tpl, { version, name }) : `${src}.sha256`;
+/** 查最新版本的候选地址表（有序，官方直连恒为最后兜底） */
+function versionCandidates() {
+  return withMirrors(`https://api.github.com/repos/${REPO}/releases/latest`);
 }
 
 /** 更新说明最多回给前端多少字符（Release 说明一般几 KB；上限只为挡住某个版本写了超长正文） */
@@ -259,22 +277,36 @@ function cleanNotes(body) {
 async function resolveLatestInfo({ force = false } = {}) {
   const now = Date.now();
   if (!force && checkCache.value && now - checkCache.at < CHECK_TTL_MS) return checkCache.value;
-  const url = `https://api.github.com/repos/${REPO}/releases/latest`;
-  const res = await fetch(url, {
+  const errors = [];
+  for (const url of versionCandidates()) {
+    try {
+      const info = await fetchLatestFrom(url);
+      checkCache = { at: now, value: info };
+      return info;
+    } catch (e) {
+      const why = (e && e.message) || String(e);
+      errors.push(`${url}：${why}`);
+      console.log(`  · 更新：${url} 查版本失败（${why}），换下一个`);
+    }
+  }
+  throw new Error(`查询最新版本失败（已试 ${errors.length} 个地址）：${errors.join('；')}`);
+}
+
+/** 从单个地址查一次最新版本信息 */
+async function fetchLatestFrom(url) {
+  const res = await fetchOnce(url, {
     headers: { 'user-agent': 'media-bridge-panel', accept: 'application/vnd.github+json' },
   });
-  if (!res.ok) throw new Error(`查询最新版本失败：HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const v = String(data.tag_name || '').replace(/^v/, '');
   if (!isValidVersion(v)) throw new Error(`最新 Release 的 tag 不是版本号：${data.tag_name}`);
-  const info = {
+  return {
     version: v,
     notes: cleanNotes(data.body),
     notesUrl: String(data.html_url || `https://github.com/${REPO}/releases/tag/v${v}`),
     publishedAt: String(data.published_at || ''),
   };
-  checkCache = { at: now, value: info };
-  return info;
 }
 
 /** 只要版本号（`install()` 那条路用） */
@@ -290,12 +322,39 @@ async function fetchBytes(url, { what }) {
     if (!fs.existsSync(p)) throw new Error(`${what} 不存在：${p}`);
     return fs.readFileSync(p);
   }
-  const res = await fetch(url, {
+  const res = await fetchOnce(url, {
     redirect: 'follow',
     headers: { 'user-agent': 'media-bridge-panel' },
   });
   if (!res.ok) throw new Error(`${what} 下载失败：HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * 沿候选表取版本包：逐个试「下载包体 + 取 .sha256 + 比对」，第一个**校验通过**的胜出。
+ *
+ * ⚠️ 走第三方代理时包体与 .sha256 同源（都在代理手里），这一校验只防传输损坏、不防代理篡改
+ * （口径见 docs/adr/0067-mirror-fallback-sources.md）。全部候选失败则抛出各地址的原因。
+ */
+async function downloadVerified(candidates, name) {
+  const errors = [];
+  for (const c of candidates) {
+    try {
+      const tarball = await fetchBytes(c.src, { what: `版本包 ${name}` });
+      const expect = parseChecksum((await fetchBytes(c.sum, { what: `校验文件 ${name}.sha256` })).toString('utf8'));
+      const actual = crypto.createHash('sha256').update(tarball).digest('hex');
+      if (actual !== expect) {
+        throw new Error(`sha256 校验不通过（期望 ${expect.slice(0, 12)}…，实际 ${actual.slice(0, 12)}…）`);
+      }
+      console.log(`  · 更新：已从 ${c.src} 取得 ${name}（sha256 ${actual.slice(0, 12)}…）`);
+      return { tarball, srcUrl: c.src };
+    } catch (e) {
+      const why = (e && e.message) || String(e);
+      errors.push(`${c.src}：${why}`);
+      console.log(`  · 更新：${c.src} 取源失败（${why}），换下一个`);
+    }
+  }
+  throw new Error(`版本包 ${name} 取不到（已试 ${candidates.length} 个地址）：${errors.join('；')}`);
 }
 
 function parseChecksum(text) {
@@ -338,14 +397,10 @@ async function install(version) {
   }
 
   const name = `media-bridge-panel-${version}.tar.gz`;
-  const srcUrl = sourceUrlOf(version, name);
-  const sumUrl = checksumUrlOf(version, name);
-  console.log(`  · 更新：下载 ${version} ← ${srcUrl}`);
+  const candidates = sourceCandidates(version, name);
+  console.log(`  · 更新：下载 ${version}（${candidates.length} 个候选地址）`);
 
-  const tarball = await fetchBytes(srcUrl, { what: `版本包 ${name}` });
-  const expect = parseChecksum((await fetchBytes(sumUrl, { what: `校验文件 ${name}.sha256` })).toString('utf8'));
-  const actual = crypto.createHash('sha256').update(tarball).digest('hex');
-  if (actual !== expect) throw new Error(`sha256 校验不通过（期望 ${expect.slice(0, 12)}…，实际 ${actual.slice(0, 12)}…），已放弃安装`);
+  const { tarball, srcUrl } = await downloadVerified(candidates, name);
 
   fs.mkdirSync(APP_ROOT, { recursive: true });
   const staging = path.join(APP_ROOT, `.staging-${version}-${process.pid}`);
