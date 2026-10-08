@@ -7,6 +7,27 @@
 
 ### 新增
 
+- **品牌图标**（详见 [ADR-0069](docs/adr/0069-brand-graphic-assets.md)）：
+  新增品牌图形资产，落地到浏览器标签页与 Emby 默认头像；**界面内（顶栏、日志）仍只有文字**。
+  - `public/logo.png`（512×512 透明底）作为浏览器标签页图标（favicon），
+    `public/index.html` 与 `public/login.html` 各加一条 `<link rel="icon">`；README 顶部也引用这张图。
+  - `server/modules/emby/assets/default-avatar.png` 换成同一张品牌图（仍是 606×606 透明底，
+    Emby 默认头像口径不变）。
+  - **对客户端的影响**：浏览器标签页多一个图标；Emby 默认头像换图 —— 尺寸与 `tag` 口径不变
+    （`tag` 仍是文件内容 md5），客户端会因内容变化重新拉一次头像。**不涉及任何 Emby 端点契约。**
+
+- **「关于」页内嵌公告**（详见 [ADR-0068](docs/adr/0068-about-page-embedded-notice.md)）：
+  「设置 → 关于」页新增一张**公告**卡，内容取自**仓库里的 `notice.html`** —— 交流群地址、贡献者名单
+  这类内容与代码分开维护，改仓库里那个文件即生效，不需要重新发版。
+  - **新增端点**：`GET /api/panel/notice` → `{html, url, error?}`（带 5 分钟缓存）。
+    `html` 默认取自 `https://raw.githubusercontent.com/<repo>/main/notice.html`，**经取源候选**
+    （`APP_MIRRORS`，与面板更新、插件库共用，见 [ADR-0067](docs/adr/0067-mirror-fallback-sources.md)）。
+  - 新增环境变量 `PANEL_NOTICE_URL` 可覆盖取回地址（显式给出时不套镜像前缀）；置 `off` / `none` / `-`
+    关闭这张卡。
+  - **内容为空或取不到 → 整张卡不显示**；内容以隔离的内嵌 frame 渲染，**不执行脚本**、样式与面板隔离。
+  - **对客户端的影响**：仅面板「关于」页多一张卡；不涉及 Emby 端点。
+    ⚠️ 走第三方代理时取回的内容可能与仓库原文不同，故按不可信内容渲染（不跑脚本）。
+
 - **字幕插件（第五类插件）与 Emby 标准字幕端点**（契约变更记录见 [docs/emby-compat.md](docs/emby-compat.md)；
   插件侧契约见插件仓库 `media-bridge-plugins/docs/plugin-contract.md`「七、字幕插件的动作」）：
   面板新增第五类插件 `subtitle`，并落地 Emby 标准的字幕取用端点。
@@ -26,7 +47,50 @@
   - 真机对照见 [docs/emby-realdevice/23-subtitles.md](docs/emby-realdevice/23-subtitles.md)（**未复测**：
     本仓库内没有真机样本，落地依据是 Emby 官方端点形状 + 插件契约，不是抓包）。
 
+- **取源候选：内置公共 gh 代理，国内默认直连**（详见 [ADR-0067](docs/adr/0067-mirror-fallback-sources.md)）：
+  - **改的是什么**：从 GitHub 取东西时，**默认先试内置公共 gh 代理**（`https://gh-proxy.com`、
+    `https://ghfast.top`），失败再退到官方直连；单次请求 20 秒超时。**面板更新与插件库共用这一套**：
+    - 应用代码（查最新版本 + 下版本包 + 下校验）；插件库（取清单 `index.json` + 取插件包）。
+  - 新增环境变量 `APP_MIRRORS`（逗号分隔、有序）可覆盖；置 `off` / `none` / `-` 只走官方。
+  - **影响哪些端点**：面板侧「版本与更新」、容器首启的取源，以及 `GET /api/plugins/library` 的
+    `sourceUrl` 与插件安装取包（不涉及 Emby 端点）。
+  - **对客户端的影响**：国内部署无需再手工找代理即可取源（含插件库）；原来只有显式 `PLUGIN_*_URL`
+    才能指定源，现在留空即走候选、失败自动降级；在意校验的用户可关掉镜像。
+  - ⚠️ **安全口径**：走第三方代理时包体与其校验值（应用代码 `.sha256`、插件 md5）同源，校验
+    **只防传输损坏、不防代理替换**（有意接受的取舍，见 ADR-0067）；要真实校验就把
+    `APP_SOURCE_URL`（或 `PLUGIN_INDEX_URL` / `PLUGIN_SOURCE_URL`）指向自己信任的镜像。
+  - 引导脚本在 `docker/`（不入库），本次同改；**需重推镜像**才对新容器生效。
+
 ### 变更
+
+- **品牌净化：对外 DTO 的自家字段与不透明 Id 前缀去掉 `catpaw`**（契约变更记录见
+  [docs/emby-compat.md](docs/emby-compat.md)）：
+  - **改的是什么**：`ProviderIds.Catpaw` → `ProviderIds.MediaBridge`；非标准字段
+    `CatpawSource` → `MediaBridgeSource`（其 `LineFilter` 子对象同改）；版本 / 媒体源 Id 前缀
+    `catpaw:` → `mbp:`（`catpawSourceId` / `parseCatpawSourceId` → `mbpSourceId` / `parseMbpSourceId`）；
+    媒体库（Views）Id 前缀 `catpawhome_` → `mbphome_`；`PresentationUniqueKey` 前缀 `p-catpaw-` → `p-mbp-`。
+    另：面板自述 `GET /api/meta` 的 `service` 由 `catpaw-panel` 改为 `mbp-panel`；登录 cookie 名
+    `catpaw_panel` → `mbp_panel`；备份包 manifest 的 `service` 同步改为 `mbp-panel`（**旧备份包不再接受还原**）。
+  - **影响哪些端点**：`GET /api/emby/Users/{UserId}/Items/{ItemId}`（详情）、`POST /api/emby/Items/{ItemId}/PlaybackInfo`、
+    拉流 / 下载 / 字幕各端点里出现的版本 Id，以及 `GET /Users/{UserId}/Views`（库 Id）。
+  - **对客户端的影响**：改的**全是不透明标识或面板自用字段**（客户端只当字符串、或直接忽略），
+    **客户端无需改动**；但客户端若缓存了旧的库 Id / 版本 Id，换版后对不上会取不到内容，**清一次客户端缓存 /
+    重新拉库列表**即可。**服务端数据无迁移**：这些前缀都是运行时现算、不落库（`emby.db` 五表无任何
+    `catpaw` 列），故不注册迁移任务、数据版本不动。
+  - 真机对照见 [docs/emby-realdevice/04](docs/emby-realdevice/04-users-userid-views.md) /
+    [10](docs/emby-realdevice/10-items-itemid-detail.md) / [23](docs/emby-realdevice/23-subtitles.md)（**未复测**）。
+  - 同时清掉面板自身文案 / 注释 / 示例里点名具体源的写法（设置项提示、聚合层注释、`develop.md` 的
+    `source` 示例、`package.json` 关键词、`CONTRIBUTING.md` 术语表），面板不点名任何源、也不假设源的形态。
+    这些不进契约、对客户端无影响。
+
+- **仓库与镜像改名，统一到 `MediaBridge` / `mediabridge`**：
+  - **GitHub 仓库** `dlushu/media-bridge-panel` → `dlushu/MediaBridge`：自更新取 Release 的默认仓库路径
+    （`APP_REPO`）随之改为 `dlushu/MediaBridge`，`package.json` 的 `repository.url` 与 README 同步更新。
+    旧地址由 GitHub 重定向仍可访问，已装环境无需改动。
+  - **Docker Hub 镜像** `dlushu/media-bridge-panel` → `dlushu/mediabridge`（Docker Hub 名称须小写，
+    故用 `mediabridge`）。**旧镜像名不再更新**，用旧名的部署需把 `docker run` / compose 里的镜像名换成
+    `dlushu/mediabridge` 后再拉取。数据卷名 `media_bridge-data`、容器名、发布资产名
+    `media-bridge-panel-<版本>.tar.gz`、备份文件名等均未变，改名不影响已有数据。
 
 - **登录态有效期可调，且改为「滑动过期」**（语义与取舍见 [ADR-0064](docs/adr/0064-panel-session-sliding-expiry.md)）：
   面板会话的有效期不再写死 30 天，可在「面板设置 → 安全」页按「数值 + 单位（分钟 / 小时 / 天）」调整，
@@ -41,6 +105,34 @@
   默认不勾，请按设备信任程度取舍。
 
 - **开源协议由 MIT 改为 AGPL-3.0**。
+
+### 修复
+
+- **HamHub 点播时反复失败（等几秒才起播）**：HamHub 把面板下发的**根相对**拉流地址
+  （`/videos/{id}/stream.hls?…`）**按 origin 解析**（RFC 3986：根相对替换整个 path），把 `/emby` 丢掉，
+  打的是 `http://<主机>:<实例端口>/videos/…` —— 撞上实例端口的 404 守卫，反复退避重试（抓包里
+  `/videos/…` 404 四次、改用 `/emby/videos/…` 才 200）。
+  - **改的是什么**：**实例端口**的路径归一化多认一条 —— 不以 `/api/` 开头的路径一律当作 Emby 根路径
+    （真机 Emby 本就把端点挂在根路径，见 [ADR-0065](docs/adr/0065-instance-port-root-path-fallback.md)）。
+  - **影响哪些端点**：**实例端口上的全部 Emby 端点**（重点：直连拉流 `videos/{ItemId}/stream`、
+    `Items/{ItemId}/Stream`、下载、字幕内容）。面板端口（面板 UI 所在）**不变**。
+  - **对客户端的影响**：**更宽容、客户端无需改动** —— 按 origin 解析（HamHub）与字符串拼接（AfuseKt）
+    两种行为都能命中；下发的地址一字未改；面板自用端点（`accounts` / `instances` 等）仍照旧拒绝。
+  - 真机对照见 [docs/emby-realdevice/12-direct-stream.md](docs/emby-realdevice/12-direct-stream.md) 的 12-6（**未复测**）。
+
+- **`DirectStreamUrl` 去容器后缀，改回裸 `stream`（对齐真机形态）**（契约变更记录见
+  [docs/emby-compat.md](docs/emby-compat.md)；决策见 [ADR-0070](docs/adr/0070-direct-stream-url-bare-stream.md)）：
+  - **改的是什么**：`MediaSources[].DirectStreamUrl` 由 `/videos/{ItemId}/stream.{Container}?…`
+    （`stream.mkv` / `stream.hls`）改为 **`/videos/{ItemId}/stream?…`（裸 `stream`，不带后缀）**。
+    **相对路径口径不变**（仍是根相对，见 [ADR-0062](docs/adr/0062-relative-playback-urls.md)）。
+  - **真机依据**：三台真机比对 —— 予初Emby（4.9.5.0）给的是裸 `stream`，即便 `Container='mkv'`
+    也不拼 `.mkv`（电影 / 剧集两条原文一致）；动漫Emby（4.10.1.0）与 OkEmby（4.9.1.90）
+    **干脆不返该字段**。面板此前拼后缀属**形态偏离**。详见
+    [docs/emby-realdevice/11-items-playbackinfo.md](docs/emby-realdevice/11-items-playbackinfo.md) 的 11-5（**未复测**）。
+  - **影响哪些端点**：仅 `POST /api/emby/Items/{ItemId}/PlaybackInfo` 的
+    `MediaSources[].DirectStreamUrl`。`MediaSources[].Id`（版本 Id）、`Path`、`Container` 字段本身不变。
+  - **对客户端的影响**：**客户端无需改动** —— 拉流路由 `stream(\.[a-z0-9]+)?` 对裸 `stream` 与
+    `stream.{ext}` 一并认，客户端自拼 `stream.mkv` 也照样能播；只是面板下发的地址换了个形态。
 
 ## [1.9.0] - 2026-10-07
 
