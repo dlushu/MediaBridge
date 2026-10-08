@@ -2,7 +2,7 @@
 /**
  * 插件入口（ingress）鉴权分类 —— **面板只有一个端口**，插件不自己 listen。
  *
- * 背景见 docs/plugin-contract.md 第十二节：外部程序（例如 FW/Rex 播放器里跑的
+ * 背景见 docs/plugin-contract.md 第九节：外部程序（例如 FW/Rex 播放器里跑的
  * output 插件 JS）不在面板进程内，手里只有 HTTP。它们经两条**通用入口**进面板：
  *
  *   GET  /api/plugins/<类型>/<id>/ui/<文件>    插件静态文件（面板直接吐）

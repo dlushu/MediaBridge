@@ -26,7 +26,7 @@ const store = require('./store');
 /** 插件仓库（`OWNER/REPO`）—— 与「面板自己」的仓库是**两个**仓库：这里只放插件包，不放源码 */
 const LIBRARY_REPO = String(process.env.PLUGIN_REPO || 'dlushu/media-bridge-plugins').trim();
 
-/** 仓库里的清单文件名（约定，见 docs/plugin-contract.md 第七节） */
+/** 仓库里的清单文件名（约定，见 docs/plugin-contract.md） */
 const INDEX_NAME = 'index.json';
 
 /** 清单支持的结构版本：v2 起条目用 types 数组（多类型，见 docs/adr/0046） */

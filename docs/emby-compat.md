@@ -309,7 +309,7 @@ docker logs -t media-bridge-panel              # 带时间戳
 >   - **影响端点**：`GET /api/emby/Users/{UserId}/Views`（库条目 `ChildCount` 取值）。
 >   - **影响方向**：对客户端是**新可见值** —— 命中行申报的库，`ChildCount` 从**占位 1** 变为**该库真实总数**；未申报 / 取不到的库仍为 1，行为不变。**客户端无需改动**（它本就按真机语义读这个字段）。
 >   - **未涉及**：`Views` 的其它字段不变；本变更**不含**服务端级 `GET /Items/Counts`。
->   - **插件侧**：契约正文在**另一仓库** [media-bridge-plugins](https://github.com/dlushu/media-bridge-plugins) 的 `docs/emby-home-plugin.md` 与 `docs/plugin-contract.md`（本仓库不复制）。TMDB 首页插件已按此申报（抓官网 About 页全库规模）。
+>   - **插件侧**：契约正文在**另一仓库** [MediaBridge-plugin-devkit](https://github.com/dlushu/MediaBridge-plugin-devkit) 的 `framework/contracts/contract-home.md` 与 `framework/contracts/plugin-contract.md`（本仓库不复制）。TMDB 首页插件已按此申报（抓官网 About 页全库规模）。
 > - **同轮还有「`Items/Counts` 填库总数」契约变更（一并声明）**：`GET /Items/Counts` 的 **`MovieCount` / `SeriesCount` 由恒回 0 改为"取首页插件申报的库总数"**（数据源与上一条的 `ChildCount` 同一条 `rows.total`，见 [ADR-0052](adr/0052-items-counts-library-total.md)）。此前「`Items/Counts` 恒回全 0」的取向**作废**。
 >   - **改的是什么**：电影 / 剧集两类各自取当前实例首页插件行申报的 `total`，按库类型归并 —— 同类型多行**取最大值**（每行报的都是**整个库的规模**，相加等于重复计数），`mixed` 行说不清是哪种、**不参与**。其余 12 个字段**仍回 0**（面板没有片库索引、数不出来；**0 = 数不出来，不是库空**）。
 >   - **影响端点**：仅 `GET /api/emby/Items/Counts`。参数（`ParentId` 等）仍全忽略：这个端点回的是实例级总数。
@@ -712,7 +712,7 @@ docker logs -t media-bridge-panel              # 带时间戳
     - **片源认证（`vod_exact`）短路在打分之前**：候选行若带 `vod_exact === true`（片源插件自行认准
       「这条就是目标作品」），面板**直接记分数 1、不判名字**，两道闸门都不走 —— 其余流转不变
       （仍受分数线与 `maxItems` 约束，只因分最高排最前、优先取详情）。这是插件在候选行上的
-      **声明性标注**，判据实现仍在 `match.js`；契约在插件仓库 `docs/plugin-contract.md`，决策见
+      **声明性标注**，判据实现仍在 `match.js`；契约在开发套件仓 `framework/contracts/`，决策见
       [ADR-0059](adr/0059-source-certified-candidate.md)。典型场景：番号站按番号精确过滤后的候选，
       避免长标题把番号的相似度稀释掉而误拒。
     - **为什么限条数**：每条命中后面都要打一次站源 `/detail` 取链 —— 不限就是十几秒（实测 3 条 ≈ 2s）。

@@ -2,7 +2,7 @@
 /**
  * 字幕插件转接处：**面板侧唯一一处**知道"字幕要去调哪个插件的哪个动作"。
  *
- * 两件事（契约第七节，正文在另一仓库 `media-bridge-plugins/docs/plugin-contract.md`）：
+ * 两件事（正文在开发套件仓 `MediaBridge-plugin-devkit/framework/contracts/contract-subtitle.md`）：
  *   ① `tracks` —— 为一个播放目标**问一次**：所有启用的字幕插件各报一份字幕轨，这里合成一份；
  *   ② `fetch`  —— 客户端点开某条轨时，按**插件自己编的 `ref`**（形状 `<插件 id>/<插件自己的东西>`）
  *      路由到那个插件取内容。面板只按**第一段**路由，其余**不解释**。

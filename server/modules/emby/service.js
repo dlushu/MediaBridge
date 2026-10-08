@@ -2020,7 +2020,7 @@ const LATEST_DEFAULT_LIMIT = 20;
  *      只有 20 条，只取第 1 页就**填不满 `Limit`**（客户端常要 30/40）；而 Emby 客户端见到
  *      `Items.Count < Limit` 就把这页当成最后一页、**再也不翻页**（SenPlayer 6.2.1 实测如此）。
  *      `StartIndex`/`Limit` 在这**一堆结果里切片**，`TotalRecordCount` 如实 = 本地手里的条数
- *      （**不是"上游里有多少条"** —— 那个数本层不知道，不能编）。见 `docs/plugin-contract.md`「分页」。
+ *      （**不是"上游里有多少条"** —— 那个数本层不知道，不能编）。见 `docs/plugin-contract.md` 的 contract-home.md「分页」。
  *   ③ **跨类型怎么排 = 按名次轮流**（tv#1, movie#1, tv#2, movie#2…）：上游的 tv / movie 是两份
  *      **独立的相关度排序**，谁也不能替谁排序 —— 轮流合并让两份次序都原样保留，不引入跨类型的人造指标。
  *      ⚠️ 曾经按行的 `popularity` 降序合并，**实测是错的**：搜「斗破苍穹」时它把一个叫 `111` 的剧

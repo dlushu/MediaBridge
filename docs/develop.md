@@ -65,7 +65,7 @@
 
 - 插件跑在**常驻子进程**里、走**管道**（Node child IPC）通信；宿主负责启停、健康与日志转发；
   进程自己退出只**如实记账，不自动重启**（见 [ADR-0037](adr/0037-no-plugin-auto-restart.md)）。
-  契约在插件仓库：[plugin-contract.md](https://github.com/dlushu/media-bridge-plugins/blob/main/docs/plugin-contract.md)；
+  契约在开发套件仓：[plugin-contract.md](https://github.com/dlushu/MediaBridge-plugin-devkit/blob/main/framework/contracts/plugin-contract.md)；
   决策见 [ADR-0028](adr/0028-plugin-system.md) 与 [ADR-0029](adr/0029-plugin-channel-and-actions.md)。
 - `/ui/*` 与 `/api/*` 两条都在 `/api/` 下 ⇒ **天然受面板门禁**。
 - **插件不随面板发行**（见 [ADR-0035](adr/0035-plugin-library.md)）：Release 包里没有插件，

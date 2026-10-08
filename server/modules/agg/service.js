@@ -76,7 +76,7 @@ const round3 = (n) => Math.round(Number(n || 0) * 1000) / 1000;
 /**
  * 「先 POST /init 再搜」的记账。
  *
- * ⚠️ **init 已搬进源插件**（它属于源协议的内部逻辑，见 docs/plugin-contract.md 第十二节）：
+ * ⚠️ **init 已搬进源插件**（它属于源协议的内部逻辑，见 docs/plugin-contract.md 的 contract-source.md）：
  * 插件按「实例地址 + 站点」记住，重启换端口后自然重来。面板这边只把插件回的
  * `initCalled` 照实记进结果里（诊断用，不参与打分）—— 原来那份 `initialized` 集合已删。
  */

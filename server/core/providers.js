@@ -13,7 +13,7 @@
  *
  * **谁往里填**：元数据插件（`server/modules/emby/meta.js` 按插件清单与开关重建这张表）。
  * 面板这一层不认识任何具体的域 —— 加第二个元数据来源不必改这里，也不必改 emby 层。
- * 决策见 docs/adr/0031，契约见 docs/plugin-contract.md 第六节。
+ * 决策见 docs/adr/0031，契约见插件契约 docs/plugin-contract.md 的 contract-metadata.md。
  */
 const byPrefix = new Map(); // 前缀（小写）→ 提供者
 const byId = new Map(); // 提供者 id → 提供者

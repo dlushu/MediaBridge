@@ -3,7 +3,7 @@
  * agg 流入口：把源插件给的地址交给**面板之外的客户端**（FW/Rex widget、播放器、…）。
  *
  * 为什么需要它：插件契约的 `http` 动作出参只有 `{status?, body, contentType?}`，**带不出
- * `Location` 头** —— 所以插件自己没法 302（见 docs/plugin-contract.md 第五节）。外部播放器
+ * `Location` 头** —— 所以插件自己没法 302（见 docs/plugin-contract.md 的 contract-source.md）。外部播放器
  * 又只拿得到一串面板地址，于是"怎么把地址交出去"这一步只能由面板做。
  *
  * 落法**只按契约里的 `playVia` 声明**（第五节；缺省 `client`），分两档：
