@@ -298,6 +298,54 @@ function aboutCard() {
   return card;
 }
 
+/**
+ * 「公告」卡：把仓库里的 `notice.html` 内嵌在「关于」页 —— 交流群地址、贡献者名单这类内容
+ * 与面板代码分开维护，改仓库里那个文件即生效（取回见 server/modules/panel/notice.js）。
+ * **没内容时整张卡不出现**（`display:none` 一直挂着，拿到内容才显示）。
+ *
+ * 用 `iframe` + `srcdoc` 渲染，而不是 `innerHTML`：远程内容是别人维护的，这样能**隔离它的样式**
+ * （内容里的 `<style>` 不会漏到面板），且 `sandbox` 不给 `allow-scripts`，脚本与内联事件属性都不执行。
+ * 留 `allow-same-origin` 是为了量内容高度、把 frame 撑到刚好；`allow-popups*` 让内容里的链接能开新标签。
+ */
+function noticeCard() {
+  const frame = el('iframe', {
+    sandbox: 'allow-same-origin allow-popups allow-popups-to-escape-sandbox',
+    style: 'display:block;width:100%;height:0;border:0;overflow:hidden',
+  });
+  const card = el('div', { class: 'card', style: 'display:none' }, el('h3', { text: '公告' }), frame);
+
+  /* 自动撑高：srcdoc 文档与面板同源，加载后量一次内容高度。内容里有图片这类异步资源时首次量得偏小，
+   * 所以再补量一次。完全量不到（例如浏览器不给同源）时退回一个够用的固定高度，别把内容压成一条线。 */
+  const fit = () => {
+    let h = 0;
+    try {
+      const doc = frame.contentDocument;
+      if (doc) h = Math.max((doc.body && doc.body.scrollHeight) || 0, doc.documentElement.scrollHeight || 0);
+    } catch {
+      h = 0;
+    }
+    frame.style.height = (h > 0 ? h : 160) + 'px';
+  };
+  frame.addEventListener('load', () => {
+    fit();
+    setTimeout(fit, 300);
+  });
+
+  api('/api/panel/notice')
+    .then((d) => {
+      const html = String((d && d.html) || '').trim();
+      if (!html) return; // 没内容：卡保持隐藏
+      frame.srcdoc = html;
+      card.style.display = '';
+      setTimeout(fit, 300); // srcdoc 一设好就有 contentDocument，先量一次，load 后再量
+    })
+    .catch(() => {
+      /* 取不到公告不算错误：静默保持隐藏，不弹提示 */
+    });
+
+  return card;
+}
+
 /* -------------------------------------------------------------- 备份与还原 */
 
 function backupCard() {
@@ -911,11 +959,12 @@ export async function renderPanelSecurity(v) {
 }
 
 /**
- * 「关于」页：**版本与更新** + **关于**两张卡。
+ * 「关于」页：**版本与更新** + **关于** + **公告**三张卡。
  *
  * 从「设置」页挪过来的：「设置」页是"要动手改的东西"（缓存/测速），
  * 而这两张是"看看而已" —— 更新卡里那段说明还动辄几十行，摆在设置页会把要改的卡挤到很下面。
+ * 公告卡是**远程内容**（仓库里的 `notice.html`，见 notice.js），没内容时它自己不显示。
  */
 export function renderPanelAbout(v) {
-  v.append(updateCard(), aboutCard());
+  v.append(updateCard(), aboutCard(), noticeCard());
 }
