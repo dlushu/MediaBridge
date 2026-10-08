@@ -13,8 +13,9 @@
  *   ② 每个请求都包在 `instance.runWith(inst, …)` 里 —— 下游（service.js / db.js / home）
  *      靠这份上下文认"这是哪个实例"，账号、会话、进度、首页插件全跟着它走。
  *
- * 路径归一化与面板端口一致（`/emby/xxx` 与 `/api/emby/emby/xxx` 都收成 `/api/emby/xxx`），
- * 这样"只填主机"的客户端照旧能用。
+ * 路径归一化：前两条与面板端口一致（`/emby/xxx` 与 `/api/emby/emby/xxx` 都收成 `/api/emby/xxx`），
+ * 这样"只填主机"的客户端照旧能用；本端口**多一条根路径兜底**（非 `/api/` 开头的一律当 Emby 根路径，
+ * 见 `normalize` 注释）——面板端口根部是面板 UI，不能这么做，故这条只在这里。
  *
  * 端口被占**不拖垮面板**：记一行日志 + 在清单里标 `error`（面板「Emby → 实例」上红字提示），
  * 面板本体照常起。
@@ -37,12 +38,19 @@ const PANEL_ONLY_RE = [
 /** iid → { inst, server, port, error } */
 const listeners = new Map();
 
-/** 与 server.js 同一套前缀归一化（两处必须一致，否则"只填主机"的客户端在一处通、另一处不通） */
+/** 前两条与 server.js 同一套前缀归一化（这两条必须一致，否则"只填主机"的客户端在一处通、另一处不通）；
+ * 第三条是本端口独有的**根路径兜底**（见下）。 */
 function normalize(pathname) {
   if (pathname === '/emby' || pathname.startsWith('/emby/')) return '/api/emby' + pathname.slice('/emby'.length);
   if (pathname === '/api/emby/emby' || pathname.startsWith('/api/emby/emby/')) {
     return '/api/emby' + pathname.slice('/api/emby/emby'.length);
   }
+  /* 根路径兜底：真机 Emby 的端点本就挂在根路径（`/videos/…`、`/Items/…`、`/Videos/…`，见
+   * emby-realdevice #12），有些客户端（实测 HamHub/1.0）拿到面板下发的**根相对**地址后
+   * **按 origin 解析**（RFC 3986：根相对替换整个 path），把 `/emby` 丢掉、不带前缀地打上来。
+   * 面板端口根部是面板自己的 UI，不能这么映射；实例端口只伺候 Emby，非 `/api/` 开头的一律
+   * 当 Emby 根路径收下（面板自用端点仍由下面的 PANEL_ONLY_RE 挡掉）。 */
+  if (!pathname.startsWith('/api/')) return '/api/emby' + pathname;
   return pathname;
 }
 

@@ -10,7 +10,7 @@
 
 | 请求（有效 token） | 含义 / 客户端用途 | 予初Emby | OkEmby |
 |---|---|---|---|
-| `GET /videos/{id}/stream?Static=true&MediaSourceId=…` | 客户端直连拉流 | **307** → 真实文件 URL（`http://103.231.56.166:9527/d/…`，反代 body 带 `<a href>`） | **206** 直出字节（`Content-Range: bytes 0-1/12019829154`、`Accept-Ranges: bytes`） |
+| `GET /videos/{id}/stream?Static=true&MediaSourceId=…` | 客户端直连拉流 | **307** → 真实文件 URL（`http://<源站反代主机>:<端口>/d/…`，反代 body 带 `<a href>`） | **206** 直出字节（`Content-Range: bytes 0-1/12019829154`、`Accept-Ranges: bytes`） |
 | 同上，无 `Range` | 全量取 | 307 | **200** 全量 |
 | 同上，`/stream.mkv` | 扩展名变体 | 307 | 200（本机容器 matroska） |
 | 同上，大写 `/Videos/` | 官方路径大小写 | 307 | **206** |
@@ -37,7 +37,8 @@
 - 12-3 **`Items/{ItemId}/File` → 不实现（登记为已知未实现）**：真机两台都支持（有效 token 回 **206** 字节），面板**未注册**（落到 501 通配）。按既有取舍「等客户端日志暴露再接线」**先不做**（客户端日志里从没出现过这条），与 `Items/{ItemId}/Download` 同族；出现即照 Download 加一条同样的路由。**已知未实现，非遗漏。**
 - 12-4 **`Items/{ItemId}/Stream/{token}` 是面板特有形状**：真机对这条（`/Items/{id}/Stream/{msId}`）回 **404**；面板把它写进 `MediaSource.Path` 当拉流渠道 ①。属**有意设计**（[ADR-0006](../adr/0006-redirect-for-playback.md)），**不改**。
 - 12-5 **拉流鉴权补认 query `X-Emby-Token`（已落码，未复测）**：客户端抓包（HamHub Android/1.0.0）显示，它在探测 / 拉流时把 token 放进 **query `X-Emby-Token=`**（不带头 `X-Emby-Token`），此前本层只从请求头取 token ⇒ 判成「没带 token」回 **401**，客户端随后改用面板发出去的 `DirectStreamUrl`（query `api_key`）才成功。现 `service.tokenFrom()` 在 query 兜底里**并列认 `api_key` / `X-Emby-Token`**（`URLSearchParams` 键区分大小写，客户端发的正是大写那种）。真机对「query 带 token」的接受度待补测。
+- 12-6 **实例端口对 Emby 根路径兜底（已落码，未复测）**：真机端点本就挂在**根路径**（上表 `GET /videos/{id}/stream?…` 两台真机都命中），面板此前要求客户端带 `/emby` 或 `/api/emby` 前缀，否则在**实例端口**命中 404 守卫。实测 **HamHub/1.0**（Android，`HamHub/1.0`）把面板下发的**根相对** `DirectStreamUrl`（`/videos/{id}/stream.hls?…`，见 [ADR-0062](../adr/0062-relative-playback-urls.md)）**按 origin 解析**（RFC 3986：根相对替换整个 path），`/emby` 被丢掉 → `http://host:8090/videos/…` → 404；抓包里同一会话**两种路径都发**：`/videos/…` 404 四次（1s/2s/4s 退避）、改用 `/emby/videos/…` 才 **200**（拿到主清单）。现 `listener.js` 的 `normalize()` 在两条与面板端口一致的规则之外**加第三条**：pathname **不以 `/api/` 开头**的一律前缀 `/api/emby`（见 [ADR-0065](../adr/0065-instance-port-root-path-fallback.md)）。**只改实例端口**；面板端口（`server.js`）不动。鉴权口径与 DTO 一字未改；`PANEL_ONLY_RE`（`accounts` / `instances` / `home-plugins` / `meta-domains`）与 `/api/`（非 emby）照旧 404。**待复测**：HamHub 点播时根路径 `/videos/…` 不再 404、主清单 200。
 
 **不能模拟**：真机 `Accept-Ranges` / `Content-Range` / `Content-Length` 这些字节级事实来自实际文件（本地）或源站（远端）；面板两档（`client` 交给源站 / `proxy` 中继）都不在 emby 层自己生成。
 
-**状态：12-1 已落码（未复测）；12-2 判定不复刻；12-3 登记为已知未实现；12-4 判定不改；12-5 已落码（未复测）。** 样本为**电影**；剧 / 集样本待补测。
+**状态：12-1 已落码（未复测）；12-2 判定不复刻；12-3 登记为已知未实现；12-4 判定不改；12-5 已落码（未复测）；12-6 已落码（未复测）。** 样本为**电影**；剧 / 集样本待补测。

@@ -3,9 +3,9 @@
 > 索引：[emby-compat.md「十、真机对照记录」](../emby-compat.md)
 
 
-**真机样本**（予初Emby 4.9.5.0；OkEmby 4.9.1.90）
+**真机样本**（予初Emby 4.9.5.0；动漫Emby 4.10.1.0；OkEmby 4.9.1.90）
 
-- 登录均 **200**。样本：予初Emby 电影 `864879`（版本 Id `mediasource_864879`）；OkEmby 电影 `47156`（版本 Id `mediasource_47156`）。
+- 登录均 **200**。样本：予初Emby 电影 `864879`（版本 Id `mediasource_864879`）与剧集 `585872`；动漫Emby 电影 `204658`（爱宠大机密）；OkEmby 电影 `47156`（版本 Id `mediasource_47156`）。
 - **路径形态**（同一请求两种带法）：
   - `POST /Users/{UserId}/Items/{ItemId}/PlaybackInfo`（Users-form）：予初Emby **200**（4146 字节）；OkEmby **404 纯文本**（`找不到文件 …` —— 该形态未注册）。
   - `POST /Items/{ItemId}/PlaybackInfo?UserId=…`（Items-form）：**两台都 200**。
@@ -26,11 +26,11 @@
 
 真机顶层**仅 2 键**：`MediaSources` / `PlaySessionId` —— 面板**一致** ✓。
 
-`MediaSources[]`（版本）真机 予初Emby **28 键**、OkEmby **27 键**（差 `DirectStreamUrl`）；面板在条件字段齐时**恰好 28 键、逐键与真机一致** ✓。下列为**有差异**的字段：
+`MediaSources[]`（版本）真机 予初Emby **28 键**（含 `DirectStreamUrl`）、动漫Emby / OkEmby **27 键**（**不含 `DirectStreamUrl` 键**）；面板在条件字段齐时**恰好 28 键、逐键与真机一致** ✓。下列为**有差异**的字段：
 
 | 字段 | 含义 / 客户端用途 | 真机 | 面板 | 处理 |
 |---|---|---|---|---|
-| `DirectStreamUrl` | 直连拉流地址 | 予初Emby 相对路径 `/videos/…stream?…&Static=true`；OkEmby **未给** | **相对路径** `/videos/…?…&Static=true`（值仍不同，见 11-4） | 形态**已对齐**（同为相对路径，见 11-4） |
+| `DirectStreamUrl` | 直连拉流地址 | 予初Emby（4.9.5.0）相对路径 **裸 `stream`**（`/videos/…/stream?MediaSourceId=…&api_key=…&Static=true`，`Container='mkv'` 也**不拼 `.mkv`**，电影 `864879` / 剧集 `585872` 两条原文一致）；动漫Emby（4.10.1.0）/ OkEmby **未给该键** | **相对路径裸 `stream`**（`/videos/…/stream?MediaSourceId=…&Static=true&api_key=…`，见 11-5） | 形态**已对齐**（相对路径 + 裸 `stream`，见 11-4 / 11-5） |
 | `Path` | 版本对应的媒体路径 | 文件绝对路径（OkEmby `/mnt/EmbyResource01/…`）或远程 http URL（予初Emby） | **本面板 Stream 端点**（**相对路径** `/Items/…`，末段为**标准文件名**，见 11-3） | 取值仍有意不同（不放源文件路径，见 [ADR-0006](../adr/0006-redirect-for-playback.md)）；**形态改为相对**（见 11-4） |
 | `Protocol` | 拉取协议 | OkEmby（本地）`File` | `Http` | 有意不同（一律走本面板 Stream）——不改 |
 | `IsRemote` | 是否远端 | OkEmby（本地）`false` | 恒 `true` | 有意不同（一律走本面板 Stream）——不改 |
@@ -44,8 +44,9 @@
 - 11-1 **UserId 校验 → 适用自动对齐例外、已对齐「只验 token」**（鉴权分支第 2、3 行）：真机播放信息端点**不比对 UserId**（有效 token + 不存在 / 非 Guid 的 UserId → **200**）。虽为 POST，但只返回版本清单、**无用户私有数据、无持久化写入**，属读取类，按既定口径直接对齐 —— 路由 `service.authorize(req, userIdOf(query))` → `service.authorize(req)`。**不引入跨账号可见性**（返回的版本清单与用户无关）。**已落码，未复测**（待端到端复核：有效 token + 任意 UserId 应回 200）。
 - 11-2 **错误码 → 不复刻真机口径**：真机对「不存在的 ItemId」回 **404 纯文本** `找不到文件 "…" 。`（予初Emby 是中文反代 / 插件口径）；面板维持 **501**（Id 前缀认不出）/ **404**（认得出但查不到），与 #10-2 同口径。
 - 11-3 **版本行副标题 → 改为「标准文件名」**：`Path` 末段（客户端取「最后一个 `/` 之后」当版本行副标题）由「站点来源标签 · 集名」改为聚合层拼好的**标准文件名**（`标题.年份.季集.分辨率.来源.音频(含声道).Atmos.动态范围.视频编码.容器`，如 `蜘蛛侠：崭新之日.2026.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265.mkv`），**不带站点前缀**。只动副标题 —— 标题位 `Name` / `MediaStreams` 不变、播放不读这个 `Path`。**已落码，未复测**（待端到端复核副标题文本）。
-- 11-4 **`DirectStreamUrl` / `Path` 的地址形态 → 绝对 URL 改为相对路径**（对齐真机，修 AfuseKt 起播）：此前 `DirectStreamUrl` 与 `MediaSources[].Path` 都是**绝对 URL**（`{proto}://{host}/api/emby/…`），理由是「绝对地址在任何解析规则下都不会错」。实测 **AfuseKt/3.2.0** 把返回的地址**当相对路径直接字符串拼在自己的 base 之后**（`base` 已含 `/emby`），于是拼成双重地址 `…/emby` + `http://…/api/emby/videos/…` → 实例端口 `normalize` 后不以 `/api/emby/` 开头 → **404**（日志：`GET /emby/http://…`）。现两处都改**相对路径**：`DirectStreamUrl` → `/videos/{ItemId}/stream.{Container}?…`（真机予初Emby 本就是这个形态），`Path` → `/Items/{ItemId}/Stream/{token}/{文件名}`（去掉 `/api/emby` 前缀）。去掉前缀后 base 是 `/emby` 还是 `/api/emby` 都能命中。随之下掉 `getItem`/`getPlaybackInfo`/`buildMediaSource` 的 `host`/`proto` 参数（routes 里那个 `protoOf` 也随之删除）。见 [ADR-0062](../adr/0062-relative-playback-urls.md)。**已落码，未复测**（待 AfuseKt 端到端复核起播）。
+- 11-4 **`DirectStreamUrl` / `Path` 的地址形态 → 绝对 URL 改为相对路径**（对齐真机，修 AfuseKt 起播）：此前 `DirectStreamUrl` 与 `MediaSources[].Path` 都是**绝对 URL**（`{proto}://{host}/api/emby/…`），理由是「绝对地址在任何解析规则下都不会错」。实测 **AfuseKt/3.2.0** 把返回的地址**当相对路径直接字符串拼在自己的 base 之后**（`base` 已含 `/emby`），于是拼成双重地址 `…/emby` + `http://…/api/emby/videos/…` → 实例端口 `normalize` 后不以 `/api/emby/` 开头 → **404**（日志：`GET /emby/http://…`）。现两处都改**相对路径**：`DirectStreamUrl` → `/videos/{ItemId}/stream?…`（当时拼的是 `stream.{Container}`，真机予初Emby 本就是这个形态；**后缀已于 11-5 去掉**，改为裸 `stream`），`Path` → `/Items/{ItemId}/Stream/{token}/{文件名}`（去掉 `/api/emby` 前缀）。去掉前缀后 base 是 `/emby` 还是 `/api/emby` 都能命中。随之下掉 `getItem`/`getPlaybackInfo`/`buildMediaSource` 的 `host`/`proto` 参数（routes 里那个 `protoOf` 也随之删除）。见 [ADR-0062](../adr/0062-relative-playback-urls.md)。**已落码，未复测**（待 AfuseKt 端到端复核起播）。
+- 11-5 **`DirectStreamUrl` 去掉容器后缀 → `stream.{Container}` 改为裸 `stream`**（对齐真机）：此前 `DirectStreamUrl` 拼 `stream${container ? '.' + container : ''}` —— mkv 源出 `stream.mkv`、missav 的 hls 源出 `stream.hls`。复核予初Emby（4.9.5.0）`PlaybackInfo` 原文：电影 `864879`、剧集 `585872` **两条的 `DirectStreamUrl` 都是裸 `stream`**（`Container='mkv'` 也不拼 `.mkv`）；更新的动漫Emby（4.10.1.0）、OkEmby 干脆**不返该字段**。⇒ 面板带后缀属**形态偏离**，改为裸 `stream`（函数去 `container` 参数、调用点去 `container: m.Container`）。**客户端无需改动**：路由正则 `stream(\.[a-z0-9]+)?` 裸后缀都收，客户端自拼 `stream.mkv` / 直接取本字段裸 `stream` 两种都能播。见 [ADR-0070](../adr/0070-direct-stream-url-bare-stream.md)。**已落码，未复测**（待客户端端到端复核拉流）。
 
 **不能模拟**：真机 `MediaSources` 的**文件级事实**（`Path` / `Size` / `Bitrate` / `Chapters` / `MediaStreams` 全轨道）来自实际扫描媒体文件，面板只能取源在集名里申报的规格，粒度天然不如真机。
 
-**状态：11-1 已落码（未复测）；11-2 判定不复刻；11-3 已落码（未复测）；11-4 已落码（未复测）。** 样本为**电影**；剧 / 集样本待补测。
+**状态：11-1 已落码（未复测）；11-2 判定不复刻；11-3 已落码（未复测）；11-4 已落码（未复测）；11-5 已落码（未复测）。** 样本已含**电影**（予初Emby `864879` / 动漫Emby `204658` / OkEmby `47156`）与**剧集**（予初Emby `585872`）。
