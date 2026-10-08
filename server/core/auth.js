@@ -41,9 +41,11 @@ const MIN_LEN = 6;
 const DEFAULT_SESSION_MIN = 15;
 const MAX_SESSION_MIN = 30 * 24 * 60;
 const COOKIE = 'catpaw_panel';
-/** 失败节流：连续 5 次 → 锁 60 秒（同一 IP） */
+/** 失败节流：连续 5 次 → 锁 60 秒（同一 IP），之后每再触发一次锁定时长翻倍（封顶 1 小时）——
+ * 防止耐心的攻击者只是等满固定的 60 秒就继续试错（渐进式延迟）。 */
 const MAX_FAILS = 5;
 const LOCK_MS = 60 * 1000;
+const MAX_LOCK_MS = 60 * 60 * 1000;
 
 /* ---------------------------------------------------------------- 外部访问令牌
  *
