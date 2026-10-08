@@ -1,0 +1,46 @@
+<!--
+  面板「设置 → 关于」页内嵌的公告内容（示例）。
+
+  本文件放在仓库根目录，面板取回后内嵌显示（默认地址
+  https://raw.githubusercontent.com/dlushu/MediaBridge/main/notice.html）。
+  改这里并推送到 main 分支即可更新「关于」页上的展示，不需要重新发版。
+
+  · 内容为空（或删掉整个文件）时，「关于」页连这张卡都不显示。
+  · 面板以内嵌 frame 渲染本文件，**不执行脚本**，样式也与面板隔离 —— 可以按需要在这里写样式。
+  · 取回地址可用环境变量 PANEL_NOTICE_URL 覆盖；置 off / none / - 可关闭这张卡。
+
+  下面是示例内容，按需要替换。
+-->
+
+<p>
+  面板的交流群、问题反馈入口与贡献者名单都放在这里。改本文件并推送到仓库，面板「关于」页很快
+  就会跟着更新；内容为空时这张卡不显示。
+</p>
+
+<p>
+  <a href="https://example.com/group" target="_blank" rel="noreferrer">交流群</a>
+  ·
+  <a href="https://github.com/dlushu/MediaBridge/issues" target="_blank" rel="noreferrer">问题反馈</a>
+  ·
+  <a href="https://github.com/dlushu/MediaBridge" target="_blank" rel="noreferrer">代码仓库</a>
+</p>
+
+<h4>贡献者名单</h4>
+<ul>
+  <li><b>@dlushu</b> —— 项目维护</li>
+  <li>欢迎补充（在仓库提交 PR 或 issue）</li>
+</ul>
+
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    font: 13px/1.75 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  h4 { margin: 16px 0 6px; font-size: 13px; }
+  p { margin: 0 0 8px; }
+  ul { margin: 0; padding-left: 20px; }
+  li { margin: 2px 0; }
+  a { color: #4a8cff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
