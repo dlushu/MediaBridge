@@ -202,7 +202,7 @@ async function run({ reason = 'manual', keys } = {}) {
   if (st.total || reason === 'manual') {
     console.log(
       `  ${st.bad ? '⚠' : '✔'} agg 测速${st.stopped ? '（被停止）' : ''}：${st.done}/${st.total} 个站 · ` +
-        `${(elapsed / 1000).toFixed(1)}s · 成功 ${st.ok}${st.empty ? `（含 ${st.empty} 个无结果）` : ''}` +
+        `${(elapsed / 1000).toFixed(1)}s · 成功 ${st.ok + st.empty}${st.empty ? `（其中 ${st.empty} 个无结果）` : ''}` +
         (st.bad ? ` · 失败 ${st.bad}：${fails.slice(0, 5).join('、')}${fails.length > 5 ? ' …' : ''}` : '')
     );
   }

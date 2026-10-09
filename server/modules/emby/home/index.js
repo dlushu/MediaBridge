@@ -98,26 +98,33 @@ function rowsOf(pluginId) {
   return snap ? snap.rows : [];
 }
 
+/** 等某个首页插件就绪（`running`）再拉它的行；起不来 / 崩了 / 超时就不等了 —— 后面 `rowsOf` 过期会自己再试 */
+async function waitReady(pluginId, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const st = host.stateOf('home', pluginId);
+    if (!st || st.status === 'running') return;
+    if (st.status === 'broken' || st.status === 'stopped') return;
+    if (Date.now() >= deadline) return;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
 /**
  * 开局预热：面板启动时（插件起来之后）把**所有启用中**首页插件的行清单拉一遍，
  * 免得第一发 `Views` 拿到空。**预热的是全部插件、不是只有被选中的那个** ——
  * 这样在面板上切换首页是瞬时的，不用等上游。
- * 失败不挡启动 —— 反正过期会自己重试。
+ * 插件进程从「启动中」到握手完成是异步的，所以**先等就绪再拉**（见 `waitReady`），
+ * 不在就绪前空打一轮 `NOT_READY`。失败不挡启动 —— 反正过期会自己重试。
  */
 async function warmHome() {
   const list = allHomePlugins();
   for (const st of list) {
     // eslint-disable-next-line no-await-in-loop
+    await waitReady(st.id);
+    // eslint-disable-next-line no-await-in-loop
     await refreshRows(st.id);
-  }
-  /* 刚起来那一下插件可能还没就绪：等一小会儿再补一次（只补这次失败的） */
-  const missed = allHomePlugins().filter((st) => !snapshots.has(st.id));
-  if (missed.length) {
-    await new Promise((r) => setTimeout(r, 800));
-    for (const st of missed) {
-      // eslint-disable-next-line no-await-in-loop
-      await refreshRows(st.id);
-    }
   }
   const total = allHomePlugins().reduce((n, st) => n + (snapshots.get(st.id) || { rows: [] }).rows.length, 0);
   if (list.length) console.log(`  ✔ 首页插件：${list.length} 个启用中，共 ${total} 行（每个实例选一个插件，其行 = 该实例客户端上的媒体库）`);
