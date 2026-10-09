@@ -10,6 +10,7 @@ import { $, el } from './dom.js';
 import { api } from './api.js';
 import { ensureAuth } from './auth.js';
 import { ensureMigrationGate } from './migration.js';
+import { showEntryPopup } from './popup.js';
 import { S } from './state.js';
 import { applyHash, applyNavState, closeNavIfNarrow, collapseNav, onHashChange, renderNavButtons, renderPage, switchPage, toggleNav, toggleNavGroup } from './shell.js';
 import { mountThemeButtons } from './theme.js';
@@ -39,6 +40,8 @@ export async function init() {
     if (head) toggleNavGroup(head);
   });
   await loadAll();
+  /* 登录后弹窗（见 core/popup.js）：后端连上了才弹（连不上也取不回内容），失败静默不打扰 */
+  if (!S.apiError) showEntryPopup().catch(() => {});
 }
 
 /**

@@ -891,6 +891,35 @@ pre.raw-json { margin-top: 8px; max-height: 320px; font-size: 11.5px; }
 .auth-remember { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-dim); }
 .auth-remember input { width: auto; }
 
+/* ---------------- 登录后弹窗（内容取自仓库 popup.html，实现见 core/popup.js） ----------------
+ * 类名统一 `.popup-*`，理由同上面的 `.mbox-*`：避开 daisyUI 的保留名。
+ * 两种形态共用一份内嵌 frame 规则：大弹窗（`.popup-mask` + `.popup-box`）与右下小弹窗（`.popup-toast`）。 */
+.popup-mask {
+  position: fixed; inset: 0; z-index: 70;
+  background: rgba(0, 0, 0, .58);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; animation: fadein .12s ease-out;
+}
+.popup-box {
+  background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--radius);
+  width: min(560px, 100%); max-height: 88vh; display: flex; flex-direction: column;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+}
+/* 正文区：frame 按内容高度撑开，超过框高时**由这里滚动**（frame 自身不滚） */
+.popup-body { padding: 16px; overflow: auto; }
+.popup-frame { display: block; width: 100%; height: 0; border: 0; overflow: hidden; }
+.popup-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+
+/* 右下小弹窗：与 `.toast` 同位置、同观感，但那支是纯文本、这里要容一段 HTML */
+.popup-toast {
+  position: fixed; right: 22px; bottom: 22px; z-index: 65;
+  width: min(360px, calc(100vw - 44px));
+  background: var(--bg-2); border: 1px solid var(--accent-dim); border-radius: 12px;
+  padding: 14px 16px; overflow: hidden;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .55);
+  animation: slidein .18s ease-out;
+}
+
 /* ---------------- 手机（≤480px）：再收一档 + 宽表改卡片 ----------------
  * ⚠️ 这一档放在**文件最后**：它要压过上面 `.mbox-*` 那几条基础规则（媒体查询不加权重，
  * 靠的就是"后来居上"）。860px 那一档解决的是"抽屉侧栏 + 单列"，到 375px 级的屏上还是挤：
@@ -944,6 +973,14 @@ pre.raw-json { margin-top: 8px; max-height: 320px; font-size: 11.5px; }
   .mbox-body { padding: 14px; }
   .mbox-actions { flex-direction: column-reverse; padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
   .mbox-actions .btn { width: 100%; }
+
+  /* 登录后弹窗：大弹窗也贴底、按钮整宽；小弹窗铺满整宽贴底，别在窄屏上缩成一条 */
+  .popup-mask { padding: 0; align-items: flex-end; }
+  .popup-box { width: 100%; max-height: 92dvh; border-radius: 14px 14px 0 0; }
+  .popup-body { padding: 14px; }
+  .popup-actions { flex-direction: column-reverse; padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
+  .popup-actions .btn { width: 100%; }
+  .popup-toast { right: 12px; left: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); width: auto; }
 
   .src-tabs { gap: 4px; }
   .kv .v { max-width: 100%; }

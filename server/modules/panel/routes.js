@@ -4,7 +4,7 @@
  *   /api/meta                     服务自述（外部可用它确认地址是不是一个面板、暴露了哪些模块）
  *   /api/modules                  模块总览（含每个模块消费的上游地址）
  *   /api/modules/:id/settings     每个模块自己的设置（通用端点，加模块不用改这里）
- *   /api/panel/info, /api/panel/notice, /api/panel/backup|restore
+ *   /api/panel/info, /api/panel/notice, /api/panel/popup, /api/panel/backup|restore
  *   /api/auth/*                   面板鉴权：status / login / logout / password（见 core/auth.js）
  *   /api/logs                     面板日志（内存环形缓冲的读取/清空，见 core/logbus.js）
  */
@@ -26,6 +26,7 @@ const { DATA_DIR, SETTINGS_DIR } = require('../../core/paths');
 const backup = require('./backup');
 const update = require('./update');
 const notice = require('./notice');
+const popup = require('./popup');
 const pkg = require('../../../package.json');
 
 /**
@@ -175,6 +176,12 @@ module.exports = function routes(r) {
    * **取不到 / 内容为空都回空串**，前端据此把整张卡去掉 —— 所以这里不返回错误码，
    * 失败原因只放在 `error` 里供排查。带 5 分钟缓存。 */
   r.add('GET', '/api/panel/notice', async (req, res) => sendJson(res, 200, await notice.get()));
+
+  /* ---- 登录面板后的**弹窗**（见 popup.js）----
+   * 内容与类型取自仓库里的 `popup.html`，经镜像候选取回（与面板更新同一套，见 ADR-0067）。
+   * **取不到 / 内容为空都回空串**，前端据此不弹 —— 所以这里不返回错误码，失败原因只放在
+   * `error` 里供排查。带 5 分钟缓存。 */
+  r.add('GET', '/api/panel/popup', async (req, res) => sendJson(res, 200, await popup.get()));
 
   /* 备份：回一份 **zip 字节**（不是 JSON）。摘要放响应头，前端下载后凭它显示"含多少文件 / 多大"。
    * 范围与排除项见 backup.js 顶部注释（全部数据、不含缓存与应用代码）。
