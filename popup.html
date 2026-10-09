@@ -1,0 +1,49 @@
+<!--
+  面板「登录后弹窗」的内容与配置（示例）。
+
+  本文件放在仓库根目录，面板取回后按下面的配置弹出（默认地址
+  https://raw.githubusercontent.com/dlushu/MediaBridge/main/popup.html）。
+  改这里并推送到 main 分支即可更新弹窗，不需要重新发版。
+
+  配置写在 <meta> 里（name 固定，content 可改）：
+    · mbp-popup-mode    弹窗类型，四选一：
+                          always      大弹窗，每次打开 / 刷新面板都弹，关闭只关当次；
+                          dismissible 大弹窗，点「不再显示」后记住，正文再改才重弹（默认）；
+                          toast       右下角小弹窗，显示 mbp-popup-seconds 秒后自动隐藏；
+                          off         不弹。
+    · mbp-popup-seconds 小弹窗（toast）自动隐藏的秒数，缺省 / 非法按 10。
+
+  · 内容为空（或删掉整个文件）时不弹，也不报错。
+  · 面板以内嵌 frame 渲染本文件，**不执行脚本**，样式与面板隔离 —— 可以按需要在这里写样式。
+  · 取回地址可用环境变量 PANEL_POPUP_URL 覆盖；置 off / none / - 可关闭。
+
+  下面是示例内容，按需要替换。
+-->
+
+<meta name="mbp-popup-mode" content="dismissible">
+<meta name="mbp-popup-seconds" content="10">
+
+<h3>欢迎回来</h3>
+
+<p>
+  这里是登录面板后弹出的提示内容（例如新版本说明、维护公告、使用约定）。改本文件并推送到仓库，
+  弹窗内容很快会跟着更新；正文一改，之前点过「不再显示」的用户也会重新看到。
+</p>
+
+<p>
+  <a href="https://github.com/dlushu/MediaBridge" target="_blank" rel="noreferrer">代码仓库</a>
+  ·
+  <a href="https://github.com/dlushu/MediaBridge/issues" target="_blank" rel="noreferrer">问题反馈</a>
+</p>
+
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    font: 13px/1.75 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  h3 { margin: 0 0 8px; font-size: 15px; }
+  p { margin: 0 0 8px; }
+  a { color: #4a8cff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
