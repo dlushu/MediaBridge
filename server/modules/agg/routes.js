@@ -265,8 +265,13 @@ module.exports = function routes(r) {
    * 搬运参数（`proxy` 档才用得上）可以在 URL 上带 `?threads=&chunkKB=` 覆盖这一次播放：
    * 优先级 URL 参数 > 源插件 `play` 返回 > 面板设置 `streamRelay` > 默认 16 路 / 512KB
    * （读取在 `stream.js` 的 `relayBytes` / `urlRelayParams`，这里不做转发，见 ADR-0045）。
+   *
+   * 另挂一条**带后缀的别名** `GET /api/agg/stream.m3u8`：面板这条出口回的正是 HLS 清单
+   * （`application/vnd.apple.mpegurl`，见 `./stream.js` 的 `PLAYLIST_MIME`），有些播放器 / 客户端
+   * 要按 URL 后缀认容器，缺后缀就当普通文件拒掉。后缀只参与路由匹配（字面段不区分大小写），
+   * 两条路径走同一个 handler —— 与 emby 层直连端点的 `stream[.{ext}]`（见 emby/routes.js）同口径。
    */
-  r.add('GET', '/api/agg/stream', async (req, res, { query }) => {
+  const serveAggStream = async (req, res, { query }) => {
     const seg = String(query.get('seg') || '').trim();
     if (seg) return stream.servePart(req, res, { seg, sid: String(query.get('sid') || '').trim() });
 
@@ -288,5 +293,8 @@ module.exports = function routes(r) {
       playVia: String(query.get('playVia') || 'client').trim(),
       clientHost: req.headers.host || '',
     });
-  });
+  };
+
+  r.add('GET', '/api/agg/stream', serveAggStream);
+  r.add('GET', '/api/agg/stream.m3u8', serveAggStream);
 };

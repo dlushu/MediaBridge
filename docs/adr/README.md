@@ -82,6 +82,7 @@
 | [0072](0072-cachedb-wal-fallback-delete-journal.md) | 缓存库 WAL 起不来时降级 DELETE journal，开库原子化 | 已采纳 |
 | [0073](0073-subtitle-tracks-in-agg-detail.md) | 字幕轨由聚合层随详情供给，emby 层只读 | 已采纳 |
 | [0074](0074-subtitle-deliveryurl-embedded-token.md) | 字幕 `DeliveryUrl` 埋 access token（与 `DirectStreamUrl` 同口径） | 已采纳 |
+| [0075](0075-stream-suffix-alias.md) | agg 流端点加带后缀的别名 `/api/agg/stream.m3u8` | 已采纳 |
 
 ## 新增一条 ADR
 

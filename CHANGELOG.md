@@ -3,6 +3,17 @@
 本文件记录值得用户注意的变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- **agg 流端点增加带后缀的别名 `/api/agg/stream.m3u8`**：有些播放器 / 客户端按 URL 后缀识别容器，
+  缺后缀就把面板这条 HLS 出口当普通文件拒掉。新路径与 `/api/agg/stream` **同一个 handler**、
+  同一套凭证与搬运语义，只是路由落在带 `.m3u8` 的形状上；面板内部改写出的签名子地址仍走原路径
+  （见 [ADR-0075](docs/adr/0075-stream-suffix-alias.md)）。
+  - 面向面板之外的客户端（出口插件 / FW / Rex widget 等）；**面板 Web 与 Emby 客户端不受影响**。
+    契约行见 [docs/develop.md](docs/develop.md) 的聚合层接口表。
+
 ## [1.9.2] - 2026-10-09
 
 ### 变更
