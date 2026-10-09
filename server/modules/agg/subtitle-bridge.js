@@ -80,14 +80,17 @@ async function callPlugin(pluginId, action, args, timeoutMs) {
   throw e;
 }
 
-/** 一条轨的轻校验：`lang` / `format` / `ref` 缺一就丢（契约要求这三个必填）；`format` 必须是认得的四种 */
-function normTrack(one) {
+/**
+ * 一条轨的轻校验：`lang` / `format` / `ref` 缺一就丢（契约要求这三个必填）；`format` 必须是认得的四种。
+ * `source` 是**申报这条轨的字幕插件名**（面板回给前端标「来源」用），由本处按插件带进来，不是插件自报。
+ */
+function normTrack(one, source) {
   const lang = String((one && one.lang) || '').trim();
   const ref = String((one && one.ref) || '').trim();
   const format = String((one && one.format) || '').trim().toLowerCase();
   if (!lang || !ref || !FORMATS.includes(format)) return null;
   const label = String((one && one.label) || '').trim();
-  return { lang, format, label: label || '', ref };
+  return { lang, format, label: label || '', ref, source: source || '' };
 }
 
 /**
@@ -97,6 +100,8 @@ function normTrack(one) {
 async function tracks(coord, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const out = [];
   for (const p of subtitlePlugins()) {
+    /* 这条轨来自哪个插件 —— 合成时一并记下（多个字幕插件各报一份，前端据此标「来源」） */
+    const source = String(p.name || p.id || '').trim();
     let list;
     try {
       // eslint-disable-next-line no-await-in-loop
@@ -110,7 +115,7 @@ async function tracks(coord, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       continue;
     }
     for (const one of list) {
-      const n = normTrack(one);
+      const n = normTrack(one, source);
       if (n) out.push(n);
       else warnOnce(p.id, `字幕插件 ${p.name || p.id} 申报了一条不合法的轨（lang/format/ref 缺、或 format 不认得），已忽略`);
     }

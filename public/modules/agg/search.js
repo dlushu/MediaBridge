@@ -340,7 +340,8 @@ export async function renderAgg(v) {
  *                     （`emby/service.js` 拼版本列表时），弹窗给的是原始线路 ⇒ 得逐条标出来。
  *
  * 另：`d.subtitles` 是**这个播放目标**的字幕轨（面板问一次字幕插件得的，`ref` 已在出口剥掉，
- * 见 docs/adr/0073）——挂在整个目标上，不分线路，所以单独一块列在最后。
+ * 见 docs/adr/0073）——挂在整个目标上，不分线路，所以单独一块列在最后；每条轨带 `source`
+ * （申报它的字幕插件名，多个字幕插件时可区分来源）。
  *
  * 剧集这条路**一定带季与集**（页面上填不齐就不让搜），所以不再有"没填集号 ⇒ 没做定位"那种分支。
  */
@@ -454,7 +455,8 @@ function openVersionsModal(title, d, opts = {}) {
               { class: 'agg-name' },
               s.label || s.lang || '-',
               el('span', { class: 'badge ml-sm', text: s.lang || '' }),
-              el('span', { class: 'badge ml-sm', text: s.format })
+              el('span', { class: 'badge ml-sm', text: s.format }),
+              s.source ? el('span', { class: 'badge ml-sm', text: s.source }) : null
             )
           )
         )

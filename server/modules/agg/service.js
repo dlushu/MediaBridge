@@ -481,7 +481,7 @@ function parseEpisodeMeta(raw) {
     atmos: false,
   };
 
-  const ext = /\.(mkv|mp4|avi|ts|m2ts|flv|mov|webm|rmvb)\b/i.exec(s);
+  const ext = /\.(mkv|mp4|avi|ts|m2ts|flv|mov|webm|rmvb|iso)\b/i.exec(s);
   if (ext) out.container = ext[1].toLowerCase();
 
   const size = /\[?\s*(\d+(?:\.\d+)?)\s*(GB|G|MB|M)\s*\]?/i.exec(s);

@@ -3,7 +3,18 @@
 本文件记录值得用户注意的变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [1.9.4] - 2026-10-10
+
+### 变更
+
+- **集名里的 `.iso` 现在认作容器**：`parseEpisodeMeta` 的容器清单补 `iso`（光盘原盘镜像，
+  老片合集常见）。此前 `.iso` 播放项的 `container` 解析为空、标准文件名还会兜底拼成 `.mkv`；
+  现在 `MediaSource.Container` / 版本文件名如实标 `iso`。**客户端无需改动**（能不能播 ISO
+  由客户端自己决定，面板如实透传）。
+- **聚合搜索「这条的版本」弹窗的字幕轨显示来源**：每条字幕轨多标一个**字幕插件名**（面板自用 API
+  `/api/agg/detail` 的 `subtitles[]` 新增 `source`），装多个字幕插件时能看出这条轨从哪来。
+  对 Emby 客户端零影响（`source` 只走面板自用 API，emby 层不读它）。同时修掉**长文件名撑破弹窗**
+  的老问题（字幕轨名字是文件名，含长哈希 / 无空格长串时不再溢出，改为折行）。
 
 ## [1.9.3] - 2026-10-09
 

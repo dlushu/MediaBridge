@@ -700,7 +700,9 @@ pre.raw-json { margin-top: 8px; max-height: 320px; font-size: 11.5px; }
  * 撞上以后占位块会被撑宽、被 padding 顶偏。这里单独一个 `.ph`，尺寸与真图完全一致。 */
 .agg-pic.ph { display: block; }
 .agg-body { flex: 1; min-width: 0; }
-.agg-name { font-weight: 600; margin-bottom: 2px; }
+/* 名字可能是长文件名，里面还夹着**不会自动断行的长 token**（40+ 位哈希、`….x265.H144`）——
+ * 不给 `overflow-wrap` 就会把弹窗撑出横向滚动条，故允许在任意位置断行。 */
+.agg-name { font-weight: 600; margin-bottom: 2px; overflow-wrap: anywhere; }
 .agg-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .chip {
   background: var(--bg-3); border: 1px solid var(--line-2); color: var(--fg-dim);

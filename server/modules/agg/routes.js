@@ -230,7 +230,7 @@ module.exports = function routes(r) {
      * HTTP 出口（前端诊断台 / 外部插件）只拿得到"有哪些轨"，拿不到 `ref` —— 与 `/api/agg/search`
      * 出口删 `ranked` 同一口径：内部字段不外泄。 */
     if (Array.isArray(out.subtitles)) {
-      out.subtitles = out.subtitles.map((s) => ({ lang: s.lang, format: s.format, label: s.label }));
+      out.subtitles = out.subtitles.map((s) => ({ lang: s.lang, format: s.format, label: s.label, source: s.source }));
     }
     return sendJson(res, 200, out);
   });

@@ -26,9 +26,10 @@
    挂在整个播放目标上（不分线路）。失败**只降级**（不出字幕、记一行日志），不影响详情本身。
 3. **字幕不进线路缓存**：线路那份照旧走详情缓存，字幕**现算** —— 缓存命中时也现问一次。
    面板侧不为字幕另开缓存（沿用契约）。
-4. **HTTP 出口剥 `ref`**：`/api/agg/detail` 对外的 `subtitles` 只留 `{lang, format, label?}`，
-   `ref`（不透明凭据）**不下发**（先例：搜索出口删 `ranked`）。emby 层走进程内直调，仍拿得到 `ref`，
-   取内容时调 `agg.fetchSubtitle(ref)`。
+4. **HTTP 出口剥 `ref`**：`/api/agg/detail` 对外的 `subtitles` 只留 `{lang, format, label?, source?}`，
+   `ref`（不透明凭据）**不下发**（先例：搜索出口删 `ranked`）。`source` 是**申报该轨的字幕插件名**
+   （由合成处按插件带进来，不是插件自报），供面板「这条的版本」弹窗标来源。emby 层走进程内直调，
+   仍拿得到 `ref`，取内容时调 `agg.fetchSubtitle(ref)`。
 5. **坐标口径**：`{ name, originalName, year, season, episode }`。emby 链的 `name` = 坐标反查出的
    规范名（`searchTitle || title`）；web 链的 `name` = 那次搜索编辑框里的文字（`wd`）。
    `agg` 自身**从不解析**站点协议，只透传坐标。

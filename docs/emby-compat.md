@@ -460,6 +460,12 @@ docker logs -t media-bridge-panel              # 带时间戳
 >   - **改的是什么**：字幕 `DeliveryUrl` **多一个 `api_key` query**。首版不带 token 时，客户端（实测 **Streama/1.0.55 android**）把 `DeliveryUrl` **原样**发出、不自己追加 token → 本层 `authorize` 判「没带 token」→ **401**（HAR `proxypin_1006403_8090_2026-10-09.har` 实测连打 7 次；对照同会话拉流因 `DirectStreamUrl` 埋了 `api_key` 是 200）。
 >   - **影响端点**：`GET /api/emby/Users/{UserId}/Items/{ItemId}` 与 `POST /api/emby/Items/{ItemId}/PlaybackInfo` 的 `MediaSources[].MediaStreams[Type=Subtitle].DeliveryUrl`（仅字幕流；`Path` / `DirectStreamUrl` 形状不变）。字幕内容端点本身的形状、鉴权口径（只验 token、不比对 UserId）、`MediaSourceId` 载荷均不变。
 >   - **影响方向**：客户端拿到的字幕地址**自带 token**，**不必自己追加** —— 把 `DeliveryUrl` 原样发送即可 200（此前 401）。**客户端无需改动。** 逐条见「十」#23 的 23-5（**已落码，未复测**）。
+> - **「聚合字幕轨带来源」契约变更（一并声明，改响应形状）**：面板自用 API `/api/agg/detail` 的 `subtitles[]` **新增 `source`**（= **申报该轨的字幕插件名**，由面板合成处按插件带进来），供面板「这条的版本」弹窗标出来源（多个字幕插件时可区分）（见 [ADR-0073](adr/0073-subtitle-tracks-in-agg-detail.md)）。
+>   - **改的是什么**：`subtitles[]` 由 `{lang, format, label?}` 扩为 `{lang, format, label?, source?}`；`ref`（不透明凭据）仍**不下发**。
+>   - **影响端点**：**Emby 对外端点一律不变** —— 详情 / 播放信息里的字幕轨、字幕内容端点的形状、鉴权口径、`MediaSourceId` 载荷都不动（`source` 只走面板自用 API，emby 层不读它）。**客户端无需改动。**
+> - **「容器清单补 iso」契约变更（一并声明，`Container` 值域扩大）**：集名规格解析（`parseEpisodeMeta`）的容器清单补 `iso`（光盘原盘镜像）。
+>   - **改的是什么**：`.iso` 播放项的 `container` 此前解析为空（且标准文件名兜底拼成 `.mkv`），现在如实为 `iso`；`MediaSources[].Container`、版本 `Path`/`DirectStreamUrl` 的 `stream.{Container}` 后缀相应可能出现 `iso`。
+>   - **影响端点**：`GET /api/emby/Users/{UserId}/Items/{ItemId}` 与 `POST /api/emby/Items/{ItemId}/PlaybackInfo` 的 `MediaSources[].Container` / `Path` / `DirectStreamUrl`（仅当源条目是 `.iso` 时取值变化）；形状与鉴权口径不变。**客户端无需改动**（能否播 ISO 由客户端自行决定）。
 > - **上游失败一律照实回失败**：**不编占位数据、不回空的假成功**。状态码 = 上游的真实原因，由 `metaBridge.httpStatusOf()` 一处决定：
 
 | 失败原因 | 回的码 |

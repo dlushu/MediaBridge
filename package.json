@@ -1,6 +1,6 @@
 {
   "name": "media-bridge-panel",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "private": true,
   "description": "媒体桥面板：聚合多个数据源的搜索结果，输出一份可供 Emby 兼容客户端直接使用的媒体源（源由插件托管）",
   "license": "AGPL-3.0-only",
