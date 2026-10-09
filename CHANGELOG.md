@@ -3,6 +3,17 @@
 本文件记录值得用户注意的变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 修复
+
+- **插件动作失败回执保留真因**：插件动作抛异常时，面板除 `code` / `message` 外**一并带回异常的
+  `cause`**（`error.cause = { code?, message? }`）。Node `fetch()` 失败时 `message` 恒为一句
+  `fetch failed`，真因（如 DNS 的 `ENOTFOUND`、端口非法的 `bad port`）在 `cause` —— 此前会被压成
+  通用的 `PLUGIN_ERROR: fetch failed`（[runner.js](server/modules/plugin/runner.js) 动作异常回执）。
+  影响面：`POST /api/plugins/:type/:id/call` 及其下游（如 Emby 字幕端点）现在能看到更具体的失败原因；
+  成功路径与既有 `code` / `message` 字段不变（**兼容追加**，见插件契约 devkit `plugin-contract.md` 第十节）。
+
 ## [1.9.1] - 2026-10-09
 
 ### 新增

@@ -8,7 +8,7 @@
  * 面板与插件之间的协议（管道，JSON 消息）：
  *
  *   宿主 → 插件   `{ id, role?, action, args }`（多类型包按 role 在分组 actions 里分发，见 adr/0046）
- *   插件 → 宿主   `{ id, ok: true, value }` / `{ id, ok: false, error: { code, message } }`
+ *   插件 → 宿主   `{ id, ok: true, value }` / `{ id, ok: false, error: { code, message, cause? } }`
  *   插件 → 宿主   `{ type: 'ready', actions: [...] }`（加载完成后发一次）
  *   插件 → 宿主   `{ type: 'fatal', error }`（入口有问题，装不起来）
  *   插件 → 宿主   `{ type: 'hostCall', id, target, action, args }`（反向调用宿主能力）
@@ -181,7 +181,16 @@ process.on('message', async (msg) => {
     seq += 1;
     send({ id, ok: true, value, ms: Date.now() - t0 });
   } catch (e) {
-    send({ id, ok: false, error: { code: (e && e.code) || 'PLUGIN_ERROR', message: (e && e.message) || String(e) }, ms: Date.now() - t0 });
+    /* 失败如实（总契约「十、失败与诊断」）：`code` 原样透传。`fetch()` 这类失败的真因不在
+     * `e.message`（永远是 "fetch failed"），而在 `e.cause`（如 `ENOTFOUND` / `bad port`）——
+     * 一并顶到 `code` 并整体带回，别把网络故障压成一句光秃秃的 "fetch failed"。 */
+    const cause = e && e.cause;
+    const err = {
+      code: (e && e.code) || (cause && cause.code) || 'PLUGIN_ERROR',
+      message: (e && e.message) || String(e),
+    };
+    if (cause && (cause.code || cause.message)) err.cause = { code: cause.code, message: cause.message };
+    send({ id, ok: false, error: err, ms: Date.now() - t0 });
   }
 });
 
