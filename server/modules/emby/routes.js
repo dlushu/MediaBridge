@@ -445,8 +445,10 @@ module.exports = function routes(r) {
     if (!metaBridge.parseItemId(params.itemId)) return notImplemented(req, res, { pathname, query });
 
     /* `MediaSources[].Path` 给**相对路径**（`/Items/…/Stream/…`，见 `service.streamPath`）—— 客户端把它
-     * 拼在自己的 base 之后（base 已含 `/emby`），所以**不需要**把本请求的 Host / 协议传进去。 */
-    const out = await service.getItem(params.itemId);
+     * 拼在自己的 base 之后（base 已含 `/emby`），所以**不需要**把本请求的 Host / 协议传进去。
+     * 但**字幕流的 `DeliveryUrl` 要带 token**（客户端原样发送、不自己追加，见 emby-realdevice #23-5），
+     * 所以把本请求的 access token 传进去（同 `getPlaybackInfo`）。 */
+    const out = await service.getItem(params.itemId, service.tokenFrom(req).token);
     service.applyUserData(out, params.userId, req);
     log.logResult(req, `条目详情 Users/…/Items/${params.itemId}`, out, q + (out.body && out.body.MediaBridgeSource ? " 源=" + out.body.MediaBridgeSource.Site : ""));
     return sendJson(res, out.status, out.body);

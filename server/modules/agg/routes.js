@@ -10,7 +10,8 @@
  *                         ⚠️ 作用域二选一：`tpl` = 直接点名一套模板（web 那页就是这么选的），
  *                         `domain` = 按域查（客户端那条路）；两者都落到同一份模板上（见 api.scopeOf）。
  *   POST /api/agg/detail  取某部影视的详情：**内部含搜索**（或 `source+site+vodId` 快路径），
- *                         把站源协议（`$$$` / `#` / `$`）拆成「线路 → 选集」，需要时可定位某一集
+ *                         把站源协议（`$$$` / `#` / `$`）拆成「线路 → 选集」，需要时可定位某一集；
+ *                         有站拿到详情时随详情回一份 `subtitles`（字幕轨，`ref` 在出口剥掉）
  *                         （作用域同上：`tpl` 或 `domain` 二选一）
  *   POST /api/agg/play    按 `{tpl?|domain?, ref}` 取播放地址（`ref` 由源插件编，面板不解释它）
  *
@@ -225,6 +226,12 @@ module.exports = function routes(r) {
   r.add('POST', '/api/agg/detail', async (req, res) => {
     const out = await api.detail((await readBody(req)) || {});
     if (!out.ok) return fail(res, out);
+    /* `subtitles[].ref` 是字幕插件编的取内容凭据，只给**进程内的 emby 层**用（它调 `agg.fetchSubtitle`）。
+     * HTTP 出口（前端诊断台 / 外部插件）只拿得到"有哪些轨"，拿不到 `ref` —— 与 `/api/agg/search`
+     * 出口删 `ranked` 同一口径：内部字段不外泄。 */
+    if (Array.isArray(out.subtitles)) {
+      out.subtitles = out.subtitles.map((s) => ({ lang: s.lang, format: s.format, label: s.label }));
+    }
     return sendJson(res, 200, out);
   });
 

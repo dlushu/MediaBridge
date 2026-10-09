@@ -39,7 +39,6 @@ const home = require('./home');
 const db = require('./db');
 const cache = require('./cache');
 const instance = require('./instance'); // 当前请求属于哪个 Emby 实例（见 instance.js）
-const subtitleBridge = require('./subtitle-bridge'); // 字幕插件转接处（tracks 聚合 / fetch 转插件动作）
 
 /** 兼容目标版本：客户端按 Emby 的版本号判断能力，这里报一个常见的 Emby 4.8 */
 const EMBY_VERSION = '4.8.0.0';
@@ -2634,8 +2633,11 @@ async function getSimilar(itemId, limit) {
  * 剧/影走 `richItemDto()`（rich 版反查）—— 它是详情专用，别和列表项那套混。
  * 聚合只做补充：连不上 / 没配 → 元数据照常返回（日志写明原因），详情页不至于打不开。
  * 粒度说明：站源只有「剧」级条目（`vod_id` 是剧），**集的定位要等聚合层给 detail 契约**。
+ *
+ * `token` 只用于**给版本里的字幕 `DeliveryUrl` 埋 `api_key`**（见 subtitleUrl / getPlaybackInfo）——
+ * 详情里的 `MediaSources[].Path` 仍是不带 token 的相对路径。
  */
-async function getItem(itemId) {
+async function getItem(itemId, token = '') {
   const p = metaBridge.parseItemId(itemId);
   if (!p) return { status: 404, body: { error: '没有这个条目' }, log: `Id 认不出 → 404：${itemId}` };
 
@@ -2706,7 +2708,9 @@ async function getItem(itemId) {
    * 阈值与"最多留几条"来自**这个域用的那套模板**（`agg/templates.js`）——
    * emby 这条链与 web 的聚合搜索**共用同一套**：`aggregateDetail` 内部那发搜索
    * 也把模板参数原样带下去了（否则会退回内置的 0.85 / 8）。 */
-  const hit = await agg.detail(Object.assign({ name, year, domain: p.domain }, wantLocator(p)));
+  const hit = await agg.detail(
+    Object.assign({ name, year, domain: p.domain, originalName: found.OriginalTitle || '' }, wantLocator(p))
+  );
   if (!hit.ok) {
     return {
       status: 200,
@@ -2742,18 +2746,13 @@ async function getItem(itemId) {
    * 线路从 `detail.lines` 里去掉了）—— 所以本层不再自己滤，只把那笔账读出来写进日志/诊断字段。
    * 这样 emby 与出口插件（FW/Rex）拿到的是同一份结果，规则也只有一个实现（见 ADR-0025 / 0043）。 */
   const lfStat = ((d.stats || {}).lineFilter) || null;
-  /* ---- 字幕轨：**为一个播放目标问一次**（字幕与线路无关，契约 §七）—— 回来的轨挂到该目标的
-   * 每个版本上（电影多压制版本共用同一份轨，见 buildMediaSource）。字幕插件是**软依赖**：
-   * 没装 / 没在跑 / `tracks` 失败都只记一行日志、不出字幕轨，**绝不破坏详情本身**
-   * （扇出与失败语义见 `subtitle-bridge.js`）。坐标是这个播放目标（片名 + 年份 + 季集），
-   * 与线路无关，所以在这里问一次即可。 */
-  const subtitles = await subtitleBridge.tracks({
-    name,
-    originalName: found.OriginalTitle || '',
-    year: year || '',
-    season: p.season,
-    episode: p.episode,
-  });
+  /* ---- 字幕轨：**聚合层已随详情问过一次**（字幕与线路无关，契约 §七）——
+   * 聚合层 `agg/api.js` 的 `detail()` 在"有站拿到详情"时问一次 `tracks`，回来的轨挂在该详情上；
+   * 本层只读 `d.subtitles`，再逐版本引用（电影多压制版本共用同一份轨，见 buildMediaSource）。
+   * 字幕插件是**软依赖**：没装 / 没在跑 / `tracks` 失败都只记一行日志、不出字幕轨，**绝不破坏详情**
+   * （扇出与失败语义见 `agg/subtitle-bridge.js`）。坐标是这个播放目标（片名 + 年份 + 季集），
+   * 与线路无关，所以聚合层问一次即可。 */
+  const subtitles = Array.isArray(d.subtitles) ? d.subtitles : [];
   const bindings = [];
   const siteDigest = [];
   /* 线路 = 版本：**每个站的线路都列出来**。版本行标题位（含"多源时前置源名""同片别名""电影多版本
@@ -2832,6 +2831,7 @@ async function getItem(itemId) {
               runtimeTicks: found.RunTimeTicks,
               item: t,
               subtitles,
+              token,
             })
           );
         });
@@ -3090,11 +3090,16 @@ function directStreamUrl({ itemId, token, src, container }) {
  * 给**相对路径**（不带 `/api/emby` 前缀、不带主机），与 `directStreamUrl` / `streamPath` 同一口径：
  * 客户端把它拼在自己的 base（已含 `/emby`）之后。`Videos` 字面段在本层路由**大小写不敏感**，
  * 所以官方大写与早期小写都能命中（见 routes.js）。
+ *
+ * 末尾**自带 `api_key`**（与 `directStreamUrl` 同口径，见 ADR-0074）：客户端（实测 Streama）把这条
+ * `DeliveryUrl` **原样**发出、不自己追加 token —— 不埋就是 401（emby-realdevice #23-5）。
+ * ⚠️ 同 `directStreamUrl`：用 query `api_key`，**不能写 `X-Emby-Token`**（本层只认请求头，写进 query 等于没带）。
  */
-function subtitleUrl(itemId, src, index, format) {
+function subtitleUrl(itemId, src, index, format, token) {
   return (
     `/Videos/${encodeURIComponent(itemId)}/${encodeURIComponent(src)}` +
-    `/Subtitles/${index}/Stream.${format}`
+    `/Subtitles/${index}/Stream.${format}` +
+    (token ? `?api_key=${encodeURIComponent(token)}` : '')
   );
 }
 
@@ -3126,7 +3131,7 @@ function ensureUniqueSourceNames(msList) {
   }
 }
 
-function buildMediaSource({ itemId, line, runtimeTicks, headers = {}, item, subtitles = [] }) {
+function buildMediaSource({ itemId, line, runtimeTicks, headers = {}, item, subtitles = [], token = '' }) {
   /* 这个版本要播的那一项：电影 = 该线路下的某个播放项；剧集 = **定位到的这一集**。
    * 两者都带集名里源标的规格（容器/分辨率/编码/体积），也带**插件给它编的 `ref`**。 */
   const t = item || line.target || {};
@@ -3264,9 +3269,10 @@ function buildMediaSource({ itemId, line, runtimeTicks, headers = {}, item, subt
   const src = mbpSourceId(t.ref, line.playVia, subMap);
   ms.Id = src;
   ms.Path = streamPath(itemId, src, fileName);
-  /* 回填每条字幕流的 `DeliveryUrl`（指向字幕内容端点，相对路径）—— 依赖上面算出的版本 Id。 */
+  /* 回填每条字幕流的 `DeliveryUrl`（指向字幕内容端点，相对路径）—— 依赖上面算出的版本 Id。
+   * 末段自带 `api_key`（本请求的 access token，见 subtitleUrl / emby-realdevice #23-5）。 */
   subTracks.forEach((x) => {
-    x.stream.DeliveryUrl = subtitleUrl(itemId, src, x.index, x.format);
+    x.stream.DeliveryUrl = subtitleUrl(itemId, src, x.index, x.format, token);
   });
   return ms;
 }
@@ -3450,7 +3456,7 @@ async function getPlaybackInfo(itemId, token = '') {
     return { status: 404, body: { error: '只有「集」和「电影」有播放信息' }, log: `Id 不是集/电影 → 404：${itemId}` };
   }
 
-  const item = await getItem(itemId);
+  const item = await getItem(itemId, token);
   if (item.status !== 200) return item;
 
   const sources = (item.body.MediaSources || []).map((m) =>
@@ -3515,8 +3521,8 @@ async function getSubtitle(itemId, src, index, format) {
 
   let out;
   try {
-    /* 回调插件 `fetch`：出参 `{ body, contentType? }`（契约 §七）。超时用桥的默认值。 */
-    out = await subtitleBridge.fetch(ref);
+    /* 取字幕内容：经聚合层转给字幕插件 `fetch`（出参 `{ body, contentType? }`，契约 §七）。超时用桥的默认值。 */
+    out = await agg.fetchSubtitle(ref);
   } catch (e) {
     const err = e || {};
     return {

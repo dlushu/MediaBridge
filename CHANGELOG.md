@@ -5,8 +5,27 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **聚合搜索「这条的版本」弹窗显示字幕**：面板聚合层新增字幕编排 —— 打开「这条的版本」时，
+  为一个播放目标问一次字幕插件（`tracks`），把字幕轨列在弹窗里。此前字幕只在 Emby 客户端可见。
+  字幕插件转接处由 emby 层迁到聚合层，web 与 Emby **共用同一处字幕来源**
+  （见 [ADR-0073](docs/adr/0073-subtitle-tracks-in-agg-detail.md)）。
+  - 面板自用 API `/api/agg/detail` 响应**新增 `subtitles`**（`[{lang, format, label?}]`；
+    内部 `ref` 凭据**不在 HTTP 出口下发**）。契约行见 [docs/develop.md](docs/develop.md)。
+  - **对 Emby 客户端无任何可见变化** —— 字幕轨形状、字幕内容端点、鉴权口径、`MediaSourceId` 载荷
+    均与上一版一致（客户端无需改动）。
+
 ### 修复
 
+- **字幕地址自带 token，修客户端取字幕 401**：字幕流的 `DeliveryUrl` 此前是**裸相对路径、不带 token**，
+  而客户端（实测 **Streama/1.0.55 android**）把它**原样**发出、不自己追加 token → 面板判「没带 token」→
+  字幕一律 **401**（拉流因 `DirectStreamUrl` 本就埋了 `api_key` 所以正常）。现在字幕地址与 `DirectStreamUrl`
+  同口径，末尾自带本请求的 access token（`…/Stream.{Format}?api_key=…`，见
+  [ADR-0074](docs/adr/0074-subtitle-deliveryurl-embedded-token.md)）。
+  - **影响端点**：详情与播放信息里**字幕流**的 `DeliveryUrl`（多一个 `api_key`）；字幕内容端点本身、
+    鉴权口径、`MediaSourceId` 载荷、`Path` / `DirectStreamUrl` 均不变。**客户端无需改动。**
+    逐条见 [emby-realdevice #23](docs/emby-realdevice/23-subtitles.md) 的 23-5（**未复测**）。
 - **插件动作失败回执保留真因**：插件动作抛异常时，面板除 `code` / `message` 外**一并带回异常的
   `cause`**（`error.cause = { code?, message? }`）。Node `fetch()` 失败时 `message` 恒为一句
   `fetch failed`，真因（如 DNS 的 `ENOTFOUND`、端口非法的 `bad port`）在 `cause` —— 此前会被压成

@@ -189,12 +189,15 @@ export async function renderAgg(v) {
     const useSeason = isMovie ? undefined : num(seasonInput);
     const useEpisode = isMovie ? undefined : num(episodeInput);
     const usePick = isMovie ? 'items' : undefined;
+    /* 字幕坐标里的「名字」= 那次搜索编辑框里的文字（同一条搜索链路，客户端那侧由 emby 反查后注入，
+     * 见 docs/adr/0073）。这里用上次搜索记下的 `wd`，输入框现读值兜底。 */
+    const wd = String((S.aggResult && S.aggResult.wd) || S.aggKeyword || '').trim();
     try {
       /* 过滤规则与详情一起拿（两个请求并发；规则读的是模块端点 —— 权威那份） */
       const [d, st] = await Promise.all([
         api('/api/agg/detail', {
           method: 'POST',
-          body: { tpl: S.aggTpl, source: m.source, site: m.siteKey, vodId: m.vod_id, season: useSeason, episode: useEpisode, pick: usePick },
+          body: { tpl: S.aggTpl, name: wd || undefined, source: m.source, site: m.siteKey, vodId: m.vod_id, season: useSeason, episode: useEpisode, pick: usePick },
         }),
         api('/api/agg/templates').catch(() => null),
       ]);
@@ -336,6 +339,9 @@ export async function renderAgg(v) {
  *   · `filterRaw` / `filterRe` —— 「线路过滤」规则（只匹配线路名）。**过滤只在客户端那侧生效**
  *                     （`emby/service.js` 拼版本列表时），弹窗给的是原始线路 ⇒ 得逐条标出来。
  *
+ * 另：`d.subtitles` 是**这个播放目标**的字幕轨（面板问一次字幕插件得的，`ref` 已在出口剥掉，
+ * 见 docs/adr/0073）——挂在整个目标上，不分线路，所以单独一块列在最后。
+ *
  * 剧集这条路**一定带季与集**（页面上填不齐就不让搜），所以不再有"没填集号 ⇒ 没做定位"那种分支。
  */
 function openVersionsModal(title, d, opts = {}) {
@@ -420,6 +426,44 @@ function openVersionsModal(title, d, opts = {}) {
     }
     body.push(box);
   }
+  /* 字幕轨：整个播放目标共用一份（不分线路），所以单独一块列在最后。无轨时给一行 muted 说明，
+   * 免得看着像"漏显示"。 */
+  const subs = Array.isArray(d.subtitles) ? d.subtitles : [];
+  const subBox = el('div', { class: 'site-group' });
+  subBox.append(
+    el(
+      'div',
+      { class: 'site-head' },
+      el('span', { class: 'chip tag', text: '字幕' }),
+      subs.length
+        ? el('span', { class: 'badge ok', text: `${subs.length} 条轨` })
+        : el('span', { class: 'badge', text: '无' })
+    )
+  );
+  if (subs.length) {
+    for (const s of subs) {
+      subBox.append(
+        el(
+          'div',
+          { class: 'agg-item' },
+          el(
+            'div',
+            { class: 'agg-body' },
+            el(
+              'div',
+              { class: 'agg-name' },
+              s.label || s.lang || '-',
+              el('span', { class: 'badge ml-sm', text: s.lang || '' }),
+              el('span', { class: 'badge ml-sm', text: s.format })
+            )
+          )
+        )
+      );
+    }
+  } else {
+    subBox.append(el('div', { class: 'muted', text: '这次没有字幕轨（没配字幕插件 / 插件没返回，看面板日志）。' }));
+  }
+  body.push(subBox);
   modal({ title: '版本 · ' + title, body, actions: [{ label: '关闭', primary: true }] });
 }
 

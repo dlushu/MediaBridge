@@ -24,6 +24,7 @@
  */
 const settings = require('../../core/settings');
 const bridge = require('./source-bridge');
+const subtitleBridge = require('./subtitle-bridge');
 const cache = require('./cache');
 const templates = require('./templates');
 const siteStats = require('./site-stats');
@@ -258,10 +259,37 @@ function noteAggPerPlugin(name, out) {
   console.log(`  · agg 聚合耗时「${name}」共 ${out.elapsedMs || 0}ms（按插件最慢的一发：${parts.join(' / ')}）`);
 }
 
+/** 字幕坐标里季 / 集号的归一：电影没有季集 → `null`（契约要求），不是空串 */
+function coordPart(v) {
+  return v === undefined || v === null || v === '' ? null : v;
+}
+
+/**
+ * 为一个播放目标问一次字幕轨（`tracks`），挂在详情响应上（`subtitles`）。
+ *
+ * ⚠️ **字幕不进线路缓存**（契约硬规定：面板侧不为字幕另开缓存）：本函数在 `cache.putLine`
+ * **之后**、以**新对象**（`Object.assign({}, base, …)`）挂上 —— 绝不回写缓存里那份。
+ * 于是缓存命中时字幕是**现算**的（每次都问一遍字幕插件），线路那份照旧复用。
+ *
+ * **触发门槛**：只在"至少一个站拿到详情"（`sites[].detail` 存在）**且给了片名**时问 ——
+ * 名字是字幕坐标的必需项；这与 emby 层"没有任何站拿到详情就不出字幕"一致。
+ *
+ * **失败只降级**：单个字幕插件失败由 `subtitle-bridge` 内部记日志跳过，本函数不抛、不破坏详情。
+ */
+async function withSubtitles(base, coord) {
+  if (!coord.name) return base;
+  const hasEntries = (base.sites || []).some((e) => e && e.detail);
+  if (!hasEntries) return base;
+  const subtitles = await subtitleBridge.tracks(coord);
+  if (subtitles.length) console.log(`  · agg 字幕轨「${coord.name}」共 ${subtitles.length} 条`);
+  return Object.assign({}, base, { subtitles });
+}
+
 /**
  * 取影视详情（**内部含搜索**）。
  *
- * `opts`：`name`（影视名）/ `year`（消歧）/ `season` + `episode`（定位某一集）/
+ * `opts`：`name`（影视名）/ `year`（消歧）/ `originalName`（原名，字幕坐标用，可选）/
+ * `season` + `episode`（定位某一集）/
  * `keys`（限定站点 `{source,key}[]`）/ `source`+`site`+`vodId`（快路径：已知绑定就直查，跳过搜索）/
  * `pick`（取法：`items` = 电影，列出每条线路的**全部播放项**；缺省 = 剧集，按季集号定位一条）/
  * `timeoutMs`（搜索那一步的单站超时，毫秒）/ `detailTimeoutMs`（**取详情**的单站超时，毫秒，
@@ -272,6 +300,7 @@ function noteAggPerPlugin(name, out) {
  * 但条数受 `maxItems` 限制（每多一条命中就要多打一次 `/detail` 取链，太慢）。
  * ⚠️ **不再有上游反查**：判据是 `match.js` 的打分（理由见那个文件顶部）。
  * 成功回 `{ok:true, sites, picked, stats, sources, elapsedMs}`（每站的成败在 `sites[].ok/error` 里）；
+ * 有站拿到详情时多一个 `subtitles`（字幕轨，**现算、不进缓存**，见 `withSubtitles`）；
  * 走缓存时多一个 `cached:true`，`elapsedMs` 是**当初算它那一次的耗时**，
  * 且**响应里没有 `sites[].data`**（那份上游原样响应不入库，见 `slimLines`）。
  */
@@ -309,6 +338,17 @@ async function detail(opts = {}) {
   const cacheKey =
     !site && !vodId && name ? detailCacheKey({ name, year: opts.year, season: opts.season, episode: opts.episode, scoped, sources, cfg, params: dom.params, opts }) : '';
 
+  /* 字幕坐标：**这一集 / 这一部片**（片名 + 原名 + 年份 + 季集号），与线路无关。
+   * emby 链的 `name` 是坐标反查出的规范名；面板链的 `name` 是那次搜索的编辑框文字。
+   * `tracks` **不参与线路缓存**，见 `withSubtitles`（缓存命中时也现算）。 */
+  const coord = {
+    name,
+    originalName: String(opts.originalName || '').trim(),
+    year: opts.year === undefined || opts.year === null ? '' : String(opts.year),
+    season: coordPart(opts.season),
+    episode: coordPart(opts.episode),
+  };
+
   if (cacheKey) {
     const hit = cache.getLine(cacheKey);
     if (hit) {
@@ -319,7 +359,8 @@ async function detail(opts = {}) {
         `  · agg 线路结果缓存命中「${name}」→ ${(hit.sites || []).length} 站` +
           `（没打插件；当初算它花了 ${hit.elapsedMs || 0}ms）`
       );
-      return Object.assign({ ok: true }, hit);
+      /* 线路那份走缓存，**字幕照旧现算**（不作缓存，见 withSubtitles） */
+      return withSubtitles(Object.assign({ ok: true }, hit), coord);
     }
   }
 
@@ -388,7 +429,7 @@ async function detail(opts = {}) {
         console.log('  · agg 线路结果没存缓存（「缓存设置 → 线路结果」的有效期填了 0 = 不缓存）');
       }
     }
-    return Object.assign({ ok: true }, out);
+    return withSubtitles(Object.assign({ ok: true }, out), coord);
   };
 
   if (!cacheKey) return compute();
@@ -432,6 +473,14 @@ async function play(opts = {}) {
     timeoutMs: opts.timeoutMs,
     params: dom.params,
   });
+}
+
+/**
+ * 取字幕内容（emby 层的字幕内容端点用）：按 `ref` 第一段路由到那个字幕插件，调 `fetch`。
+ * `ref` 由字幕插件编、面板不解释（见 `subtitle-bridge.js`）；失败**如实抛**，调用方归类成状态码。
+ */
+async function fetchSubtitle(ref) {
+  return subtitleBridge.fetch(ref);
 }
 
 /**
@@ -585,6 +634,7 @@ module.exports = {
   liveSources,
   detail,
   play,
+  fetchSubtitle,
   aggregateSearch,
   selectSites,
   probeSearch,

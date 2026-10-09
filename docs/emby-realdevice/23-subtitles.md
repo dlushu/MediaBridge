@@ -7,7 +7,7 @@
 
 这是**字幕插件的落地端点**：面板把字幕插件 `tracks` 动作申报的轨挂进版本（`MediaStreams[]` 里 `Type:'Subtitle'`），客户端点开某条轨时打这条端点；面板解出版本 Id 里的字幕 `ref`，交给插件 `fetch` 动作取回内容后回字节。端点形状取 Emby **标准**的一条（见下「为什么是这个形状」）。
 
-**客户端实测**：**无**。本条端点此前在面板上根本不存在（会落进通配 `ANY /api/emby/*rest` → 501），客户端日志里也尚未出现它的请求 —— 也就是说，**当前没有任何客户端真的来要过字幕**。落地依据是 Emby 协议与插件契约，不是抓包。
+**客户端实测**：**有**（Streama/1.0.55 android，HAR `proxypin_1006403_8090_2026-10-09.har`）。客户端**确实**来要字幕了（这条端点已存在并可命中），但首版因 `DeliveryUrl` **不带 token**、客户端**原样**发送 → **401**（详见 23-5）。
 
 **判读**：Emby 客户端靠版本里的 `MediaStreams[]` 认字幕轨：`Type:'Subtitle'` + `Index`（流序号）+ `DeliveryMethod` / `DeliveryUrl`。真有字幕时，客户端会在用户选中某条轨后打这条内容端点。面板此前既不出字幕轨、也没有内容端点，所以字幕插件即便申报了轨也**无处可挂、无端点可取**。
 
@@ -20,9 +20,12 @@
   - **字幕与线路无关**（契约 §七）：面板**为一个播放目标问一次** `tracks`，把回来的轨**挂到该目标的每个版本上**（电影多压制版本共用同一份轨）。**取源插件 `tracks` 失败只降级**（不出字幕轨、记一行日志，不破坏详情）。
 - 23-4 **字幕流补 `IsDefault:false` / `IsForced:false`（已落码，未复测）**：字幕轨首版漏了这两个布尔字段。实测 **Yamby**（Kotlin 客户端）把 `MediaStream.IsDefault` 声明成**必填**，缺了整条 `PlaybackInfo` 反序列化直接抛 `SerializationException`（报文路径 `$.MediaSources[0].MediaStreams[2]` —— 恰是视频/音频之后的第一条字幕流），**整个播放页打不开**。宽容的客户端读不到当 `false` 处理所以此前没暴露。真机字幕流本就带 `IsDefault:false`；补上后语义一致（外挂字幕不是默认轨/强制轨）。
 - 23-3 **版本 Id 载荷扩展（已落码，未复测）**：`mbpSourceId` 的 JSON 载荷由 `{r, v?}` 扩为 `{r, v?, s?}`；`s` = `{ "<流序号>": "<字幕 ref>" }`。**无字幕时不写 `s`**（载荷与旧版一致）；`parseMbpSourceId` 旧载荷照常解析（`s` 缺省为空）。`ref` 由**字幕插件自己**构造、自带 `<插件 id>/` 前缀，面板**不代加**前缀、只按第一段路由。
+- 23-5 **字幕 `DeliveryUrl` 埋 access token（已落码，未复测）**：首版字幕流的 `DeliveryUrl`（23-2）是**裸相对路径**、**不带 token**；Streama（`Streama/1.0.55 android`）**把 `DeliveryUrl` 原样发出**，不自己追加 token → 本层 `authorize` 判「没带 token」→ **401**（HAR `proxypin_1006403_8090_2026-10-09.har` 实测：entry[8]–[13]、[15] 连打 7 次这条端点，请求头只有 `User-Agent` / `Icy-MetaData` / `Accept-Encoding` / `Host` / `Connection`，**无 `X-Emby-Token` / `X-Emby-Authorization` 头、也无 `api_key` query**）。对照：同一次会话里客户端拉流（`GET /emby/videos/…/stream.m3u8?…&api_key=…`，面板 `DirectStreamUrl` 埋了 `api_key`，客户端原样用）是 **200** —— 差别就在"URL 带不带 token"。
+  - **处理**：字幕 `DeliveryUrl` 与 `DirectStreamUrl` 同口径，末尾埋**本请求的 access token**：`…/Stream.{Format}?api_key=<token>`（`DirectStreamUrl` 也用 query `api_key`，见 ADR-0062 / ADR-0074）。**鉴权口径不变**——端点仍只验 token、不比对 UserId；变的只是**面板发出的 URL 自带 token**，客户端不必自己加。
+  - **影响面**：`subtitleUrl` 增 `token` 参数并埋 `?api_key=`；签名链 `getItem(itemId, token)` → `buildMediaSource({ …, token })` → `subtitleUrl(…, token)`；`routes.js` 的条目详情调用点把 `service.tokenFrom(req).token` 传进去，`getPlaybackInfo` 内 `getItem(itemId, token)`。**无 token 时不埋**（与 `directStreamUrl` 一致：拿不到 token 的调用方本就过不了 `authorize`）。
 
 **为什么是这个形状**：`Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}` 是 Emby 的**标准**字幕取用形状（外挂字幕流即由它交付）。面板路由**不支持段内**的 `Stream.:format`（见 `core/router.js`），故按 `serveDirectVideo` 的老范式：把 `:file` 收成**整段**，在处理器里用正则 `/^Stream\.(srt|ass|ssa|vtt)$/i` 校验。`Videos` 字面段**大小写不敏感**，官方大写与早期小写一并认下。
 
 **不能模拟**：真机这条端点的**响应头与状态码细节**（`Content-Type` 取值、是否 `Content-Disposition`、无效 `Index` / 无效 token 时真机的确切回应）尚未取到，待补测。真机是否对**内嵌**字幕也走这条端点、`DeliveryMethod` 取值（`External` 还是别的）也未对照。
 
-**状态：23-1 / 23-2 / 23-3 / 23-4 已落码（未复测）。**
+**状态：23-1 / 23-2 / 23-3 / 23-4 / 23-5 已落码（未复测）。**

@@ -63,24 +63,24 @@ server/modules/
     runner.js             子进程管理（起进程、管道消息、留尾部日志、停进程）
     store.js              插件清单与包落盘（解出来的目录 → plugins/<类型>/<id>/）
     contract.js           契约常量（动作名、消息类型、超时、两道校验的清单读取）
-  agg/                    10 文件  /api/agg/*
+  agg/                    11 文件  /api/agg/*
     index.js              模块清单（含测速任务的开机 / 设置变更两个钩子）
     routes.js             路由
     templates.js          模板存取与校验（data/templates/<id>.json + domains.json）
     service.js            搜索 / 详情 / 播放的编排（打分与线路过滤都在这一层）
     source-bridge.js      唯一的转接处：把源插件的回复还原成上游那份形状（status / ok / text / json）
+    subtitle-bridge.js    字幕插件转接处：tracks（详情问一次，挂在整个播放目标上）/ fetch 转插件动作（按 ref 第一段路由）
     match.js              片名清洗与打分（挑片判据的唯一实现）
-    api.js                进程内调用面：loadSites / detail / play / probeSearch
+    api.js                进程内调用面：loadSites / detail / play / probeSearch / fetchSubtitle
     cache.js              线路结果缓存（独立 SQLite，按天）
     site-stats.js         站点统计：测速结果（speed）+ 顺手记账（call），每站每类只留最近一次
     site-test.js          站点测速任务：每 6 小时自动一轮 / 手动开一轮
-  emby/                   11 文件  /api/emby/**
+  emby/                   10 文件  /api/emby/**
     index.js              模块清单
     routes.js             端点注册（已实现端点与面板自用端点必须注册在 501 通配之前）
-    service.js            各端点业务与公共函数；详情 / 播放走 agg/api.js
+    service.js            各端点业务与公共函数；详情 / 播放走 agg/api.js；字幕轨随详情来（读 agg 的 subtitles）、取内容走 agg.fetchSubtitle
     meta.js               元数据域表的同步与转发（取数问元数据插件的动作）
     meta-bridge.js        面板中立的那层：条目 Id 派生与解析、图片基地址拼装、外部 id 反查
-    subtitle-bridge.js    字幕插件转接处：tracks 聚合（挂进版本）/ fetch 转插件动作（按 ref 第一段路由）
     instance.js           Emby 实例注册表 + 请求级实例上下文（多实例的唯一真源）
     listener.js           每个启用中的实例在自己端口上挂一个 http 服务
     cache.js              图片索引缓存（独立 SQLite）
@@ -114,7 +114,7 @@ data/                     运行时数据（已 .gitignore，含凭证与密码�
 | id | 层 | 对外前缀 | 消费的上游 | 状态 |
 |---|---|---|---|---|
 | `plugin` | 插件宿主 | `/api/plugins` | — | 可用（装 / 卸 / 启停 / 重启 / 动作调用 / webui 托管与转发 / 安装确认） |
-| `agg` | 聚合层 | `/api/agg` | 源插件（经插件宿主） | 可用 |
+| `agg` | 聚合层 | `/api/agg` | 源插件、字幕插件（均经插件宿主） | 可用 |
 | `emby` | 消费层 | `/api/emby` | 聚合层（进程内直调）、元数据与首页插件（经插件宿主） | 握手、登录（多账号，存内置 sqlite）、媒体库、条目列表与详情、搜索、图片、相似推荐、播放与下载跳转已实现；未实现的端点按 [emby-compat.md](docs/emby-compat.md) 逐个补齐；首页插件（`home` 类型）经统一插件宿主运行，见 [emby-home-plugin.md](docs/emby-home-plugin.md) |
 | `panel` | 宿主层 | `/api/panel`、`/api/modules`、`/api/meta`、`/api/logs`、`/api/auth` | — | 可用（含数据备份与还原、自更新） |
 

@@ -452,6 +452,14 @@ docker logs -t media-bridge-panel              # 带时间戳
 >   - **改的是什么**：`directStreamUrl` 恢复 `container` 参数并内置 `hls→m3u8` 映射（`hls` 是 DTO 容器枚举值、不在 ExoPlayer 的后缀推断表里；真机 HLS 拉流地址本就是 `*.m3u8`），`getPlaybackInfo` 调用点恢复传 `container: m.Container`；`Container` 为空 → 裸 `stream`。其余字段不变。
 >   - **影响端点**：仅 `POST /api/emby/Items/{ItemId}/PlaybackInfo` 的 `MediaSources[].DirectStreamUrl`。拉流端点本身不变（路由 `stream(\.[a-z0-9]+)?` 对裸 / `.m3u8` / `.mkv` 都收）。
 >   - **影响方向**：字段值由裸 `stream` 变为 `stream.m3u8`（HLS 源）/ `stream.mkv` 等（文件源）—— 靠 URL 后缀判类型的客户端**恢复播放**；走协议字段的客户端不受影响。**客户端无需改动**。逐条见「十」#11 的 11-5（**已落码，未复测**）。
+> - **「字幕轨改由聚合层随详情供给」契约变更（一并声明，对外端点无变化）**：字幕轨的取数位置由 **emby 层自己问字幕插件**，改为**聚合层在 `/api/agg/detail` 里问一次、随详情回 `subtitles`**（emby 层读 `d.subtitles`、取内容走 `agg.fetchSubtitle`，见 [ADR-0073](adr/0073-subtitle-tracks-in-agg-detail.md)）。
+>   - **改的是什么**：`subtitle-bridge` 由 `emby/` 迁到 `agg/`（模块归属变化，见 [ARCHITECTURE.md](../ARCHITECTURE.md)）；`agg.detail()` 新增字幕编排（只在「至少一个站拿到详情 + 调用方给了 `name`」时问一次 `tracks`，挂在整个播放目标上、**不进线路缓存**）；面板自用 API `/api/agg/detail` 响应**新增 `subtitles`**（`[{lang, format, label?}]`，`ref` 在 HTTP 出口剥掉）。
+>   - **影响端点**：**Emby 对外端点一律不变** —— 详情 / 播放信息里的字幕轨、字幕内容端点的形状、鉴权口径、`MediaSourceId` 载荷，与上一轮「字幕插件」变更一字不差。变的只是**面板内部**的取数位置与面板自用 API `/api/agg/detail`（见 [docs/develop.md](develop.md)）。
+>   - **影响方向**：**对 Emby 客户端无任何可见变化**（字幕照旧挂、内容照旧取）。**客户端无需改动。** 本变更不含新端点 / 新字段，**未复测**。
+> - **「字幕 `DeliveryUrl` 埋 access token」契约变更（一并声明，字段取值变化）**：字幕流的 `DeliveryUrl` 由**裸相对路径、不带 token**，改为**末尾自带本请求的 access token**（`…/Stream.{Format}?api_key=<token>`，与 `DirectStreamUrl` 同口径，见 [ADR-0074](adr/0074-subtitle-deliveryurl-embedded-token.md)）。
+>   - **改的是什么**：字幕 `DeliveryUrl` **多一个 `api_key` query**。首版不带 token 时，客户端（实测 **Streama/1.0.55 android**）把 `DeliveryUrl` **原样**发出、不自己追加 token → 本层 `authorize` 判「没带 token」→ **401**（HAR `proxypin_1006403_8090_2026-10-09.har` 实测连打 7 次；对照同会话拉流因 `DirectStreamUrl` 埋了 `api_key` 是 200）。
+>   - **影响端点**：`GET /api/emby/Users/{UserId}/Items/{ItemId}` 与 `POST /api/emby/Items/{ItemId}/PlaybackInfo` 的 `MediaSources[].MediaStreams[Type=Subtitle].DeliveryUrl`（仅字幕流；`Path` / `DirectStreamUrl` 形状不变）。字幕内容端点本身的形状、鉴权口径（只验 token、不比对 UserId）、`MediaSourceId` 载荷均不变。
+>   - **影响方向**：客户端拿到的字幕地址**自带 token**，**不必自己追加** —— 把 `DeliveryUrl` 原样发送即可 200（此前 401）。**客户端无需改动。** 逐条见「十」#23 的 23-5（**已落码，未复测**）。
 > - **上游失败一律照实回失败**：**不编占位数据、不回空的假成功**。状态码 = 上游的真实原因，由 `metaBridge.httpStatusOf()` 一处决定：
 
 | 失败原因 | 回的码 |

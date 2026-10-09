@@ -80,6 +80,8 @@
 | [0070](0070-direct-stream-url-bare-stream.md) | `DirectStreamUrl` 去容器后缀：改回裸 `stream`（对齐真机） | 已被 0071 取代（实测打断靠后缀判类型的客户端） |
 | [0071](0071-direct-stream-url-container-suffix.md) | `DirectStreamUrl` 恢复容器后缀，`hls` 映射为 `m3u8` | 已采纳（取代 0070；能播优先于真机形态对齐） |
 | [0072](0072-cachedb-wal-fallback-delete-journal.md) | 缓存库 WAL 起不来时降级 DELETE journal，开库原子化 | 已采纳 |
+| [0073](0073-subtitle-tracks-in-agg-detail.md) | 字幕轨由聚合层随详情供给，emby 层只读 | 已采纳 |
+| [0074](0074-subtitle-deliveryurl-embedded-token.md) | 字幕 `DeliveryUrl` 埋 access token（与 `DirectStreamUrl` 同口径） | 已采纳 |
 
 ## 新增一条 ADR
 
