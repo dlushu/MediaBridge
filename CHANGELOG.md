@@ -3,6 +3,12 @@
 本文件记录值得用户注意的变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 变更
+
+- 公告与登录后弹窗增加 Telegram 交流群入口，移除公告正文中的维护说明。
+
 ## [1.9.4] - 2026-10-10
 
 ### 变更
