@@ -48,6 +48,7 @@ server/core/              基础设施，不认识任何业务
   settings.js             模块设置：defaults 合并 → validate → 原子写
   upstream.js             上游客户端与转发；configuredUrl(消费方, 提供方)
   providers.js            元数据提供者注册表：条目 Id 的前缀 ↔ 元数据插件（见 ADR-0031）
+  image-url.js            封面地址的**形态判据**（唯一出处）：完整 URL / 面板代取前缀 / 图床相对路径（见 ADR-0079）
   registry.js             模块注册表与总览自述
   logbus.js               日志总线：包装 console，透传 stdout 的同时在内存里留一份环形缓冲（面板「日志」页）
   auth.js                 面板门禁：单密码 + 会话签名

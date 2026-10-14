@@ -72,6 +72,7 @@
  */
 const { sendJson, sendBuffer, readBody, readRawBody, encodeLocation } = require('../../core/http');
 const service = require('./service');
+const { imageKindOf } = require('../../core/image-url');
 /* 流内核（agg 拥有）：`proxy` 档的清单子地址与字节中继都共用那一份，别再各写一遍 */
 const streamKernel = require('../agg/stream');
 const log = require('./log');
@@ -621,12 +622,16 @@ module.exports = function routes(r) {
   });
 
   /**
-   * 图片中继：`GET /api/emby/img/{host}/{path}` —— 给**要 Referer 的图床**补上 Referer 取图。
+   * 图片中继：`GET /api/emby/img/{host}/{path}?…&mbm=<签名>`（契约里的「面板代取」形态）。
    *
-   * 插件把这类封面改写成**根相对**的这个地址（见 `stream.js` 的 `serveImage`），客户端按它连的
-   * Emby 实例端口解析就落到这里。放在这一层的原因与 `/hls` 相同：**实例端口只收 `/api/emby/`**，
-   * 客户端够得着的只有这里。同样**豁免 token**（Emby 图片端点本来就不看凭证），
-   * 防开放代理靠**图床域名白名单**（插件算不出面板的 HMAC，签名那条路走不通）。
+   * 图床**不带 Referer 就取不到**（403）那批封面，由插件把地址写成这个前缀，面板在出图那一跳
+   * 补签名、客户端再回来取（见 `stream.js` 的 `serveImage`）。放在这一层的原因与 `/hls` 相同：
+   * **实例端口只收 `/api/emby/`**，客户端也**只在这个前缀下发请求** —— 所以面板给客户端的任何
+   * "回面板取"的地址都必须落在 `/api/emby/` 下（反例见 ADR-0079）。
+   *
+   * 同样**豁免 token**（Emby 图片端点本来就不看凭证）；**凭证就是那道签名**：签名覆盖
+   * `{host}/{path}/上游query/{mbh}`，`mbh` 是插件申报的 Referer/UA —— 面板不拿站点域名当白名单，
+   * 也不猜哪个图床要头（那是插件的知识）。
    *
    * ⚠️ **必须注册在通配 `ANY /api/emby/*rest` 之前**。
    */
@@ -757,23 +762,29 @@ module.exports = function routes(r) {
       return sendJson(res, 404, { error: '这张图取不到：tag 验签不过，索引里也没有' });
     }
 
-    /* 出图这一跳：
-     *   · 插件给的**根相对**地址（`/api/emby/img/…`，封面指到面板自己的图片中继）→
-     *     **补一道面板签名**，再补成本跳的绝对地址。签名是这条中继唯一的凭证 ——
-     *     面板不拿站点域名当白名单（见 stream.js 的 `serveImage`）。
-     *   · 其余（图床绝对地址等）原样 302。面板不知道、也不该猜哪个域名要 Referer，
-     *     那是插件的事：要走中继就由插件改写成上面的相对地址来表达。 */
-    if (url.startsWith('/api/emby/img/')) {
+    /* 出图这一跳**只认两种形态**（判据的唯一出处是 `core/image-url.js`，见 ADR-0079）：
+     *   · `relay`（`/api/emby/img/…`，插件声明"这张图请面板代取"）→ 补**本跳 origin** + 一道面板
+     *     签名。签名是这条中继唯一的凭证 —— 面板不拿站点域名当白名单（见 stream.js 的 `serveImage`）。
+     *   · `absolute`（图床完整地址）→ 原样 302。面板不知道也不猜哪个域名要 Referer，
+     *     那是插件的事：要走中继就由插件写成上一种形态来表达。
+     * ⚠️ **其余形态一律不出图**（这里如实 404）。相对路径的归属是**图床**（要按该域的 `imageBase`
+     *   拼，见 meta-bridge 的 `imageUrlOf`）；把它补成本机 origin 只会产出客户端取不到的地址 ——
+     *   本机只有 `/api/emby/` 前缀下的端点，而客户端也**只在这个前缀下发请求**：实测正好是
+     *   「302 到 `http://实例:8092/xxx.jpg` → 客户端改写成 `/api/emby/xxx.jpg` → 501 刷屏」
+     *   （反例见 ADR-0079）。这类值只可能是旧索引 / 旧 tag 留下的，404 一行点名即可。 */
+    const kind = imageKindOf(url);
+    if (kind === 'relay') {
       url = streamKernel.originOf(req) + streamKernel.signImagePath(url);
-    } else if (url.startsWith('/')) {
-      url = streamKernel.originOf(req) + url;
+    } else if (kind !== 'absolute') {
+      console.log(`  ✘ emby 图片 ${label} → HTTP 404 地址形态不可用（${kind}）：${String(url).slice(0, 80)}${log.clientTag(req)}`);
+      return sendJson(res, 404, { error: '这张图取不到：地址形态不可用（只接受完整 URL 或面板代取形态）' });
     }
 
     /* 一律 302（见上面那段）：面板只回 `Location`，字节全在源站与客户端之间跑。
      * 两条取图路（tag / 本地索引）已经在上面对 URL 做过校验，仍是这里唯一的 SSRF 防线。
      * ⚠️ 日志必须写出**这一发去了哪**：客户端拿 302 自己取图，它取不动时面板这边**什么都看不到**
      * （没有后续请求）。只写 `via=tag` 看不出问题 —— 「中继」还是「直连 <某 host>」才是一眼定位的关键。 */
-    const toRelay = url.includes('/api/emby/img/');
+    const toRelay = kind === 'relay';
     let dest = url;
     try {
       const u = new URL(url);

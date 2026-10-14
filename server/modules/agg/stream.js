@@ -36,6 +36,7 @@ const { pipeline } = require('stream/promises');
 const { sendBuffer, sendError, encodeLocation } = require('../../core/http');
 const auth = require('../../core/auth');
 const settings = require('../../core/settings');
+const { IMG_RELAY_PREFIX } = require('../../core/image-url'); // 图片中继前缀的唯一出处（见 ADR-0079）
 const api = require('./api');
 
 /**
@@ -396,9 +397,14 @@ function signImagePath(rel) {
   const qIdx = s.indexOf('?');
   const p = qIdx >= 0 ? s.slice(0, qIdx) : s;
   const q = qIdx >= 0 ? s.slice(qIdx + 1) : '';
-  const segs = p.split('/').filter(Boolean); // ['api','emby','img',host,…]
-  const host = decodeURIComponent(segs[3] || '').trim().toLowerCase();
-  const path = segs.slice(4).join('/');
+  /* ⚠️ host/path 按**前缀常量**剥出来（不是按段数硬猜索引）：前缀在 `core/image-url.js` 定义一次，
+   * 这里跟着它走 —— 前缀改了、或者有人把它拼成别的前缀，这里立刻失效而不是"静默拼错域名"。 */
+  if (!p.startsWith(IMG_RELAY_PREFIX)) return s;
+  const rest = p.slice(IMG_RELAY_PREFIX.length);
+  const slash = rest.indexOf('/');
+  if (slash <= 0) return s;
+  const host = decodeURIComponent(rest.slice(0, slash)).trim().toLowerCase();
+  const path = rest.slice(slash + 1);
   if (!host || !path) return s;
   const mac = auth.signStreamPart(imageSigPayload(host, path, q));
   return `${p}?${q ? q + '&' : ''}mbm=${mac}`;
@@ -435,9 +441,12 @@ async function serveImage(req, res) {
   }
   const sigQ = kept.concat(hdr ? [`mbh=${hdr}`] : []).join('&');
   const upQ = kept.join('&');
-  const segs = rawPath.split('/').filter(Boolean); // ['api','emby','img',host,…]
-  const cleanHost = decodeURIComponent(segs[3] || '').trim().toLowerCase();
-  const cleanPath = segs.slice(4).join('/');
+  /* host/path 按**前缀常量**剥（与 `signImagePath` 同一处常量，见 `core/image-url.js`）：不按段数硬猜，
+   * 免得哪天前缀换了、这里静默把域名切错。 */
+  const rest = rawPath.startsWith(IMG_RELAY_PREFIX) ? rawPath.slice(IMG_RELAY_PREFIX.length) : '';
+  const slash = rest.indexOf('/');
+  const cleanHost = slash > 0 ? decodeURIComponent(rest.slice(0, slash)).trim().toLowerCase() : '';
+  const cleanPath = slash > 0 ? rest.slice(slash + 1) : '';
   if (!cleanHost || !cleanPath || !auth.verifyStreamPart(imageSigPayload(cleanHost, cleanPath, sigQ), mac)) {
     return sendError(res, 403, '这个图片地址的签名对不上（面板换了密钥后请重取一次）');
   }

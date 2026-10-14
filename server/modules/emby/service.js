@@ -34,6 +34,7 @@ const agg = require('../agg/api'); // 聚合层的进程内调用面（原来是
 /* 拉流的**落法内核**（判 302 / 清单中继、清单改写工具）—— 与 agg 的流入口共用同一份，
  * 别再各写一遍（曾经就是逐行两份拷贝）。见 agg/stream.js 顶部。 */
 const streamKernel = require('../agg/stream');
+const { imageKindOf } = require('../../core/image-url'); // 图片地址形态的唯一判据（见 ADR-0079）
 const BRAND = require('../../core/branding'); // 默认服务器名（客户端「服务器列表」里显示的那个）
 const home = require('./home');
 const db = require('./db');
@@ -3951,12 +3952,16 @@ function parseImageTag(itemId, tag) {
   } catch {
     return null;
   }
-  /* 放行两种形态：
-   *   · 完整 http(s) 地址 —— 插件直接给图床地址（绝大多数）；
-   *   · **根相对**地址（`/api/emby/img/…`）—— 插件把要 Referer 的封面指到**面板自己的图片中继**
-   *     （见 agg/stream.js 的 `serveImage`）。面板在出图时补成本跳的绝对地址。
+  /* 只放行两种形态（判据的唯一出处是 `core/image-url.js`，见 ADR-0079）：
+   *   · `absolute` 完整 http(s) 地址 —— 插件直接给图床地址（绝大多数）；
+   *   · `relay`    `/api/emby/img/…` —— 插件把要 Referer 的封面指到**面板自己的图片中继**
+   *     （见 agg/stream.js 的 `serveImage`），出图那一跳补成本跳的绝对地址。
+   * **图床的相对路径不属于这里**：它该在写入侧（`meta-bridge.imageUrlOf`）就按该域的 `imageBase`
+   * 拼成完整地址；放行它只会让出图那一跳把"图床的路径"当成"面板的路径"（反例见 ADR-0079）。
+   * 旧 tag 因此判不过 → 回落本地索引；索引里同样的旧值会在出图那一跳如实 404（不迁移、不猜）。
    * 这里只是形态校验，真正的凭证仍是本面板签的那道 sig；面板没发过的值到不了这一步。 */
-  if (!/^(https?:\/\/|\/)/i.test(url)) return null;
+  const tagKind = imageKindOf(url);
+  if (tagKind !== 'absolute' && tagKind !== 'relay') return null;
 
   const want = imageSig(itemId, url);
   const got = parts[2];

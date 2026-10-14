@@ -20,6 +20,7 @@
  */
 const host = require('../../plugin/host');
 const instance = require('../instance');
+const { imageKindOf } = require('../../../core/image-url');
 
 /** 一个库最多放这么多条目（与改造前一致） */
 const MAX_ITEMS = 200;
@@ -333,9 +334,13 @@ function normalizeItem(it) {
 }
 
 /**
- * 图片地址：**两种形态都收**（见契约「面板代取图片」）。
- *   · 完整 http(s) URL —— 插件直接给图床地址，客户端自己取；
- *   · **根相对**的 `/api/emby/img/…` —— 插件声明「这张图请面板代取」，出图那一跳再补签名与 origin。
+ * 图片地址：只收**两种**形态（判据见 `core/image-url.js` 与 ADR-0079）。
+ *   · `absolute` 完整 http(s) URL —— 插件直接给图床地址，客户端自己取；
+ *   · `relay`    `/api/emby/img/…` —— 插件声明「这张图请面板代取」，出图那一跳再补签名与 origin。
+ *
+ * 其余（**图床相对路径**、裸文件名）**丢掉**：首页行没有"域"可以拿来查 `imageBase`、拼不出正确
+ * 地址，而补本机 origin 只会产出客户端取不到的死地址（那次整库封面刷 501 的来源之一）。
+ * 首页插件的封面要么给整串 URL、要么走面板代取形态 —— 契约里就是这么写死的。
  *
  * ⚠️ 这里**曾经**是个只认 http(s) 的 `httpUrl()`，把代取地址整条丢掉：条目进不了 ImageTags，
  * 客户端连图片请求都不会发，那一整行封面全空 —— 而面板日志里**一条线索都没有**（实测踩过）。
@@ -343,8 +348,8 @@ function normalizeItem(it) {
  */
 const imageRef = (v) => {
   const s = String(v || '').trim();
-  if (/^https?:\/\//i.test(s)) return s;
-  return /^\/api\/emby\/img\//.test(s) ? s : '';
+  const kind = imageKindOf(s);
+  return kind === 'absolute' || kind === 'relay' ? s : '';
 };
 
 /** 归一化一整行：接受数组或 `{items:[…]}`；按 id 去重；超过上限的计入 dropped */

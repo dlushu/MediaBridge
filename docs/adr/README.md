@@ -86,6 +86,7 @@
 | [0076](0076-source-bind-by-entry-id.md) | 直绑元数据域条目 Id：搜索精度差的站点按 `entryId` 直连，失败回落按名搜 | 已采纳 |
 | [0077](0077-relay-small-object-single-connection.md) | 小对象单连接直搬：探测与"取第一块"合并成一发 | 已采纳（改 0045 第 1 步；"一块"这条线与大对象"掐掉重下"由 0078 改） |
 | [0078](0078-segment-object-single-connection.md) | 段级对象一律单连接直搬（上限 8MB）；更大的那一发当流式前缀 | 已采纳（改 0077 的直搬线、0045 第 1 步） |
+| [0079](0079-image-address-three-forms.md) | 封面地址三形态：判据只认中继前缀，图床相对路径按 `imageBase` 拼 | 已采纳（修 1.9.5 的出图回归） |
 
 ## 新增一条 ADR
 
