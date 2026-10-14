@@ -72,8 +72,22 @@ const EMBY_PANEL_ONLY_RE = [
   /^\/api\/emby\/home-plugins\b/,
   /^\/api\/emby\/meta-domains\b/,
 ];
+
+/**
+ * **客户端回头来取的中继端点**（图片中继 / HLS 分片中继）。
+ *
+ * 它们是**面板自己签发出去的地址**（`Items/{id}/Images/Primary` 的 302、HLS 清单里改写出的分片），
+ * 客户端照着取时落在**它连进来的那个端口**上 —— 只填面板端口的客户端就会打到面板端口来。
+ * 与"面板自用端点"无关，两个端口都放行。
+ *
+ * ⚠️ 漏放的代价是静默的：客户端拿到 404，封面全空白 / 分片全断，而面板日志里只有一条 404 指路语。
+ */
+const EMBY_CLIENT_RELAY_RE = /^\/api\/emby\/(?:img|hls)\b/;
+
 function embyServedOnPanelPort(pathname) {
-  return pathname === '/api/emby/System/Info/Public' || EMBY_PANEL_ONLY_RE.some((re) => re.test(pathname));
+  return pathname === '/api/emby/System/Info/Public'
+    || EMBY_CLIENT_RELAY_RE.test(pathname)
+    || EMBY_PANEL_ONLY_RE.some((re) => re.test(pathname));
 }
 
 /* 设置读完了，按 `panel.logMax` 落实日志缓冲条数（默认 500）。

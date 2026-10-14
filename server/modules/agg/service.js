@@ -639,6 +639,10 @@ async function fetchDetailOnce(source, site, vodId, timeoutMs, season, episode, 
     }
     r0.ok = true;
     r0.detail = res.detail;
+    /* 直绑回传的资源级坐标（契约 `binds`）：插件把它回在 `detail` 出参**顶层**（`res.vod_id`），
+     * 而面板下游读的是 detail 对象里的 `vodId`（绑定 / `ProviderIds` / 版本诊断字段都用它）——
+     * 在这里归一，免得每个消费点都要知道"有两种落点"。插件本就在 detail 里给了 `vodId` 的不覆盖（它优先）。 */
+    if (r0.detail && !r0.detail.vodId && res.vod_id) r0.detail.vodId = res.vod_id;
     /* 把源标的规格挂上去（面板这半件事，见函数头）。`items` 与 `target` 是**同一个对象的引用**
      * （电影取法里 target = items[0]），所以按线路各补一次就行 —— 别重复补两遍。
      *
@@ -744,23 +748,69 @@ async function aggregateDetail(sources, sites, opts = {}) {
     return out;
   }
 
-  /* ---- 正常路径：先搜（**搜索那一步已经把分打好了**），再按命中项取 detail ---- */
-  const searchSites = pickSites(sites, opts);
-  const search = await aggregateSearch(sources, searchSites, {
-    wd: opts.name,
-    page: '1',
-    timeoutMs,
-    /* 打分要"目标是哪部片"：名字 + 年份 + 季集，全交给 match.js（筛选逻辑就在搜索这一步，
-     * 所以 detail 只是"拿已经筛好的链"，不再自己判一遍）。 */
-    want: { name: opts.name, year: opts.year, season, episode },
-    /* 打分参数：调用方显式给了就用它的，没给就落回**这套模板** ——
-     * ⚠️ `params` 必须传下去：漏了它，`aggregateSearch` 里的 `cfg` 就是空对象，
-     * 分数线与条数会退回内置默认（0.85 / 8），于是"搜索页按模板筛、emby 这条链按 0.85 筛"，
-     * 同一套模板两个口径（原先就是这个毛病）。 */
-    matchOptions: { minScore: opts.minScore, maxItems: opts.maxItems },
-    params: cfg,
-  });
-  out.searched = true;
+  /* "这条详情能不能用"的判据跟着取法走：电影看**有没有播放项**，剧集看**有没有定位到这一集**；
+   * （线路过滤 `lf.re` 另算，见下面 `usableItems`）。这两项直绑与按名搜**共用**同一判据。 */
+  const needTarget = episode !== null && episode !== undefined;
+  const usableNeed = pick === 'items' ? 'item' : needTarget;
+  out.stats.needTarget = needTarget;
+
+  /* ---- 直绑：条目 Id 解得出域 + entryId 时，先问**声明认领该域**的源插件（契约，见 contract-source.md
+   * 「直绑元数据域条目 Id」）----
+   * 契约口径（对面板是**义务**，不是自由发挥）：
+   *   ① 先直绑：对所有声明了该域 `binds` 的源插件以 `detail({ id: entryId })` 直调，跳过按名搜；
+   *   ② 直绑成功即用：拿到可用线路的站**不再**走它的按名搜索（省一发扇出）；
+   *   ③ 直绑失败**必须回落**该站的按名搜索（判据/分数线/条数一律不变）；
+   *   ④ 直绑与按名搜**只对同一个站二选一执行**，不双算。
+   * 适用场景：按名搜必然命中 0 的站点（搜索精度差）—— 这是它们唯一能拿到线路的通道。 */
+  const bindDomain = String(opts.domain || '').trim();
+  const bindEntryId = String(opts.entryId || '').trim();
+  const bindDone = new Map(); // composite(source\u0001key) → repR（直绑成功、拿到可用线路的站）
+  let bindUsable = 0; // 其中**过了线路过滤**的条数（进 `usableItems` 的账）
+  if (bindDomain && bindEntryId) {
+    const cand = pickSites(sites, opts).filter((s) => Array.isArray(s.binds) && s.binds.includes(bindDomain));
+    if (cand.length) {
+      const got = await Promise.all(
+        cand.map(async (s) => ({ s, r: await fetchDetail(needSource(byId, s.source), s, bindEntryId, detailMs, season, episode, pick) }))
+      );
+      for (const { s, r } of got) {
+        if (r.ok) out.stats.detailOk += 1;
+        else out.stats.detailFailed += 1;
+        /* 直绑失败（抛错 / 回 error / 没线路 / 没定位到）→ 不落账，该站回落按名搜（契约义务 ③） */
+        if (!detailUsable(r.detail, usableNeed)) continue;
+        r.bindEntryId = bindEntryId;
+        r.sameNameCount = 0;
+        r.variantCount = 0;
+        bindDone.set(sid(s.source, s.key), r);
+        if (detailUsable(r.detail, usableNeed, lf.re)) bindUsable += 1;
+      }
+      out.stats.bind = { sites: cand.length, usable: bindDone.size };
+      console.log(
+        `  · agg 直绑「${bindDomain}/${bindEntryId}」：${cand.length} 个声明该域的站 → ` +
+          `${bindDone.size} 个拿到可用线路${bindDone.size < cand.length ? `（其余 ${cand.length - bindDone.size} 个回落按名搜）` : ''}`
+      );
+    }
+  }
+
+  /* ---- 正常路径：先搜（**搜索那一步已经把分打好了**），再按命中项取 detail ----
+   * ⚠️ 站点里**排除直绑已成功的**（契约 ④）：那些站已经有线路了，再搜一遍就是双算。 */
+  const searchSites = pickSites(sites, opts).filter((s) => !bindDone.has(sid(s.source, s.key)));
+  const search = searchSites.length
+    ? await aggregateSearch(sources, searchSites, {
+        wd: opts.name,
+        page: '1',
+        timeoutMs,
+        /* 打分要"目标是哪部片"：名字 + 年份 + 季集，全交给 match.js（筛选逻辑就在搜索这一步，
+         * 所以 detail 只是"拿已经筛好的链"，不再自己判一遍）。 */
+        want: { name: opts.name, year: opts.year, season, episode },
+        /* 打分参数：调用方显式给了就用它的，没给就落回**这套模板** ——
+         * ⚠️ `params` 必须传下去：漏了它，`aggregateSearch` 里的 `cfg` 就是空对象，
+         * 分数线与条数会退回内置默认（0.85 / 8），于是"搜索页按模板筛、emby 这条链按 0.85 筛"，
+         * 同一套模板两个口径（原先就是这个毛病）。 */
+        matchOptions: { minScore: opts.minScore, maxItems: opts.maxItems },
+        params: cfg,
+      })
+    : { sites: [], matched: [], ranked: [], match: null, stats: { sources: 0 } };
+  out.searched = searchSites.length > 0;
   out.stats.searched = searchSites.length;
   out.stats.sources = search.stats.sources;
   out.stats.match = search.match;
@@ -771,7 +821,9 @@ async function aggregateDetail(sources, sites, opts = {}) {
   }
   /* 没命中 → 如实说（把"搜了但没一条够格"也带上，调用方/日志一眼能分清是没搜到还是没匹配上） */
   const picked = (search.matched || [])[0] || null;
-  if (!picked) {
+  /* 只有"既没搜到命中、又**没有任何直绑成功的站**"才如实早返回 ——
+   * 直绑拿到线路时不能在这里丢掉（契约 ②：直绑成功即用） */
+  if (!picked && !bindDone.size) {
     for (const e of search.sites || []) {
       if (out.sites.some((x) => x.source === e.source && x.key === e.key)) continue;
       const item = { source: e.source, key: e.key, name: e.name, api: e.api, ok: e.ok, ms: e.ms, sameNameCount: 0 };
@@ -802,11 +854,11 @@ async function aggregateDetail(sources, sites, opts = {}) {
   }
   out.stats.variants = (search.matched || []).length - repOfSite.size;
 
-  /* 命中的站**全部取 detail**（不再只取 picked 那一站）。
+  /* `wanted` = 要展开的站：**搜索命中的站 ∪ 直绑成功的站**（后者没有搜索候选，得单独并进来）——
    * 顺序按**模板里勾的站点顺序**排 —— 否则并发搜索"谁先回来谁在前"，客户端版本列表每次刷新顺序都在跳
    * （同一条线路位置换来换去，找不着）。模板里有它就是那个名次，不在里面的排到最后。 */
   const orderIdx = new Map((cfg.order || []).map((x, i) => [sid(x && x.source, x && x.key), i]));
-  const wanted = Array.from(bySite.keys()).sort((a, b) => {
+  const wanted = Array.from(new Set([...bySite.keys(), ...bindDone.keys()])).sort((a, b) => {
     const ia = orderIdx.has(a) ? orderIdx.get(a) : 9999;
     const ib = orderIdx.has(b) ? orderIdx.get(b) : 9999;
     return ia - ib;
@@ -816,18 +868,18 @@ async function aggregateDetail(sources, sites, opts = {}) {
    *   `usableItems`= 其中**能用**的条数（`detailUsable`）—— 它是不是 0，决定要不要补打。
    * `usableBefore` 是同一批条目**不看线路过滤**时的可用条数：只用于日志诊断
    *（"规则挡掉了几条"一眼可见）；补打与判据一律用 `usableItems`（过滤后）。 */
-  const needTarget = episode !== null && episode !== undefined;
-  out.stats.needTarget = needTarget;
-  /* "这条详情能不能用"的判据跟着取法走：电影看**有没有播放项**，剧集看**有没有定位到这一集**；
-   * 再加上线路过滤（`lf.re`）—— 过滤后一条都列不出来的，对客户端就是 0 个版本。 */
-  const usableNeed = pick === 'items' ? 'item' : needTarget;
   const attempted = new Set();
-  let usableItems = 0;
-  let usableBefore = 0;
+  /* 直绑已拿到的可用条数**先入账** —— 它同样是"客户端已经有版本"的依据（有它就不必再接续补打）。
+   * `usableBefore` 里直绑那部分 = `bindDone.size`（进 `bindDone` 的都是过了"有线路"判据的）。 */
+  let usableItems = bindUsable;
+  let usableBefore = bindDone.size;
 
-  const done = new Map();
+  /* `done` 以直绑结果打底：直绑成功的站直接就是这一站的代表条目（无搜索候选、也无变体） */
+  const done = new Map(bindDone);
   await Promise.all(
     wanted.map(async (composite) => {
+      /* 直绑已收的站：线路已在 `bindDone` 里，跳过按名搜那套（契约 ④：不双算） */
+      if (bindDone.has(composite)) return;
       const s = siteByKey(sites, ...composite.split('\u0001'));
       const list = bySite.get(composite) || [];
       if (!s || !list.length) return;
@@ -1002,15 +1054,24 @@ async function aggregateDetail(sources, sites, opts = {}) {
   for (const x of out.sites) if (!done.has(sid(x.source, x.key))) ordered.push(x);
   out.sites = ordered;
 
-  const pickedFinal = out.pickedFromExtra || picked;
+  /* `picked` = "代表值"（emby 层拿它填老字段；真正的逐站绑定在 `sites[].detail.vodId`）。
+   * 来源优先级：接续补打命中的 > 按名搜分最高的 > **直绑成功的站**（全直绑时没有搜索命中）。 */
+  const bindPick =
+    !picked && bindDone.size
+      ? (() => {
+          const [composite, r] = bindDone.entries().next().value;
+          const [srcId, siteKey] = composite.split('\u0001');
+          return { source: srcId, siteKey, vod_id: String((r.detail && r.detail.vodId) || ''), score: null, matchReason: '' };
+        })()
+      : null;
+  const pickedFinal = out.pickedFromExtra || picked || bindPick;
   delete out.pickedFromExtra;
   out.picked = {
     source: pickedFinal.source,
     key: pickedFinal.siteKey,
     vodId: String(pickedFinal.vod_id || ''),
-    /* `picked` = **分数最高的那条**（跨站），它是"代表值"：emby 层拿它填 ProviderIds/老字段。
-     * 现在只有一种来源 —— 打分（`match.js`），所以带上分数与理由，别让人再去猜。 */
-    matchedBy: out.stats.extraHit ? 'score+extra' : 'score',
+    /* `picked` 是"代表值"：来源有三 —— 直绑（`bind`）/ 打分（`score`）/ 补打（`score+extra`）。 */
+    matchedBy: out.stats.extraHit ? 'score+extra' : bindPick ? 'bind' : 'score',
     score: round3(pickedFinal.score),
     matchReason: pickedFinal.matchReason || '',
     /* 该站一共命中几条（1 条代表 + N 条变体）。诊断用：以前这里只算"完全同名"的条数，

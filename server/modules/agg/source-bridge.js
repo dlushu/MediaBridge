@@ -82,6 +82,10 @@ function asUpstream(res) {
      *   · `name` = 实例的显示名（单站测速的回执要写"测的是哪个源"） */
     detail: (res && res.detail) || null,
     detailNote: String((res && res.detailNote) || ''),
+    /* 直绑回传的资源级坐标（契约 `binds`）：插件在 `detail` 出参顶层回的 `vod_id` —— 面板**不解释**，
+     * 原样往上传（聚合层把它记进绑定，见 `contract-source.md`「直绑元数据域条目 Id」）。
+     * ⚠️ 必须显式带过来：本函数是"白名单"式的，漏一行这个字段就静默丢了。 */
+    vod_id: String((res && res.vod_id) || ''),
     urls: Array.isArray(res && res.urls) ? res.urls : [],
     header: (res && res.header) || {},
     parse: Number((res && res.parse) || 0),
@@ -131,7 +135,14 @@ async function loadSites() {
       );
     }
     for (const s of (out && out.sites) || []) {
-      sites.push(Object.assign({}, s, { source: joinRef(p.id, s.source || '') }));
+      sites.push(
+        Object.assign({}, s, {
+          source: joinRef(p.id, s.source || ''),
+          /* 该插件声明的直绑域（契约 binds，包级、对它每个站点生效）——
+           * 聚合层据此把对应域的 entryId 直接交给 detail、跳过按名搜索 */
+          binds: Array.isArray(p.binds) ? p.binds.slice() : [],
+        })
+      );
     }
   }
 

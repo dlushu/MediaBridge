@@ -2709,7 +2709,19 @@ async function getItem(itemId, token = '') {
    * emby 这条链与 web 的聚合搜索**共用同一套**：`aggregateDetail` 内部那发搜索
    * 也把模板参数原样带下去了（否则会退回内置的 0.85 / 8）。 */
   const hit = await agg.detail(
-    Object.assign({ name, year, domain: p.domain, originalName: found.OriginalTitle || '' }, wantLocator(p))
+    Object.assign(
+      {
+        name,
+        year,
+        domain: p.domain,
+        /* 直绑坐标（契约 `binds`）：条目 Id 里解出的 entryId 一并交给聚合层 —— 它据此先问**声明认领该域**
+         * 的源插件（按 entryId 直调 detail），失败才回落按名搜。这一格是 emby 链传入的**唯一入口**：
+         * 没它聚合层永远走不到直绑（web / 出口插件只给 name）。解不出 entryId 时留空，直绑自动跳过。 */
+        entryId: p.entryId,
+        originalName: found.OriginalTitle || '',
+      },
+      wantLocator(p)
+    )
   );
   if (!hit.ok) {
     return {
@@ -3663,7 +3675,7 @@ async function finishStream({ p, pr, playVia, origin, over }) {
   if (mode === 'relay') {
     return {
       status: 200,
-      log: `${label} parse=${play.parse} → 200 面板中继（字节经面板，分块并发搬运）` + headerNoteRelay,
+      log: `${label} parse=${play.parse} → 200 面板中继（字节经面板：8MB 以内单连接直搬，更大分块并发）` + headerNoteRelay,
       relay: Object.assign({ url, headers, label }, streamKernel.mergeRelayOverrides(over, play)),
     };
   }
@@ -3939,7 +3951,12 @@ function parseImageTag(itemId, tag) {
   } catch {
     return null;
   }
-  if (!/^https?:\/\//i.test(url)) return null;
+  /* 放行两种形态：
+   *   · 完整 http(s) 地址 —— 插件直接给图床地址（绝大多数）；
+   *   · **根相对**地址（`/api/emby/img/…`）—— 插件把要 Referer 的封面指到**面板自己的图片中继**
+   *     （见 agg/stream.js 的 `serveImage`）。面板在出图时补成本跳的绝对地址。
+   * 这里只是形态校验，真正的凭证仍是本面板签的那道 sig；面板没发过的值到不了这一步。 */
+  if (!/^(https?:\/\/|\/)/i.test(url)) return null;
 
   const want = imageSig(itemId, url);
   const got = parts[2];

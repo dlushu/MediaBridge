@@ -233,7 +233,7 @@ docker logs -t media-bridge-panel              # 带时间戳
 | GET | `/api/emby/Items/{ItemId}/Images/{type}[/{index}]` | 路径参数 `ItemId`（面板发出去的条目 Id）、`type`（`Primary`/`Backdrop`/`Logo`…）、`index`（多张背景图时客户端逐张要；**忽略**）；query `tag`（**本面板签发的签名 tag —— 本侧的唯一取图凭证**）、`maxWidth`/`quality`/`ImageTypeLimit`（忽略） | **302 到原图**（面板**不再代取字节**，`Location` = tag / 索引里的图片 URL，见 [ADR-0036](adr/0036-image-endpoint-redirect.md)）；`tag` 缺失/验签不过 → **404**。**豁免 AccessToken**；tag = `cpimg.<base64url(图片URL)>.<签名>`。官方把 `Tag` 定义为**可选**（只影响缓存强弱），但直链只存在于 tag 里，故**认不出即 404**；按 `Id` 反查上游的兜底**已拆除**（见下「图片」那条） | **实测要求**（客户端点开条目后随即请求 `Images/Primary` / `Images/Backdrop`，且**不带任何凭证**；`/index` 形状随多张背景图一并加上）；**真机对照见「十」#18：予初Emby / nyamedia / OkEmby 的图片端点不校验 token（无 / 无效 token 照样 200 出图），itsmygo 校验 token（401 JSON）；四台都把 `tag` 当可选缓存键、都忽略 `/index`；`maxWidth`（按宽等比缩放）予初Emby / nyamedia / OkEmby 响应、itsmygo 忽略，面板亦忽略（302 原图、不代取不缩放 → **有意偏离**，见 18-7）。面板维持「豁免 AccessToken + 认签名 tag」，与客户端取图不带凭证的现实一致（见 [ADR-0036](adr/0036-image-endpoint-redirect.md)）** |
 | GET | `/api/emby/Items/{ItemId}/Similar` | 路径参数 `ItemId`（面板发出去的条目 Id）；`UserId` 在 query（**只验 token、不比对 UserId**，17-1 起对齐真机 —— 无 / 无效 token → 401 纯文本；有效 token + 错配 / 不存在 / 不带 UserId 照旧 200）、`Limit`（切前 N 条）、`Fields`（忽略） | 200 `QueryResult<BaseItemDto>`：**上游的相似推荐**（`recommendations`，与详情**同一次请求**就拿到），`{Items, TotalRecordCount}`；Id 认不出 → 404；上游失败 → 照实回失败码。**响应形状经真机实测复核、一致 ✓**（真机确为 `{Items, TotalRecordCount}`） | 部署者指定（**归 emby 层** —— 按坐标反查上游，与季/集同类；不是"有什么"，所以不走首页模块） |
 | GET | `/api/emby/Users/{UserId}/Images/{type}` | 路径参数 `UserId`、`type`（任意） | **200 `image/png`**：回品牌图标 `assets/default-avatar.png`（606×606 透明底，所有用户共用一张）；文件缺失才 404。**豁免 AccessToken**。tag = 文件内容 md5（见「十、#2」2-5） | 部署者指定（真机回用户设置的头像；面板用品牌图标统一代替，UserDto 给的 `PrimaryImageTag` 与之同源） |
-| GET | `/api/emby/Videos|videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}` | 路径参数 `ItemId`（集/电影）、`MediaSourceId`（**版本 Id**，`mbp:` + base64url(deflateRaw(JSON))，**载荷含 `s` 字段承载「流序号 → 字幕 `ref`」的映射**）、`Index`（`MediaStreams[]` 里该字幕流的 `Index`）、`Format`（`srt`/`ass`/`ssa`/`vtt`，大小写不敏感）；`UserId` 可带（**只验 token、不比对 UserId**，与拉流同口径）；另有带起播位置的官方变体 `…/{Index}/{StartPositionTicks}/Stream.{Format}`（`StartPositionTicks` **忽略**） | **200 `text/*`**：解出 `s[Index]` 得 `ref` → 按第一段路由到字幕插件 → 调 `fetch({ ref })` → 回插件给的 `body`（`Content-Type` 优先取插件 `contentType`，否则按 `Format` 落：`srt→application/x-subrip` / `ass`/`ssa→text/x-ssa` / `vtt→text/vtt`，均加 `; charset=utf-8`）；`{Index}` 认不出 → **404**；版本 Id 认不出 → **400**；Id 非集/电影 → **404**；插件取内容失败 → **照实回失败码**（`metaBridge.httpStatusOf`：插件没在跑 / 没这个动作 → 503、超时 → 504、其余 → 502） | 字幕插件落地（**新增**：Emby 标准外挂字幕取用形状；此前落到通配 → 501）。**真机对照见「十」#23：无真机样本、未复测** |
+| GET | `/api/emby/Videos|videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}` | 路径参数 `ItemId`（集/电影）、`MediaSourceId`（**版本 Id**，`mbp:` + base64url(deflateRaw(JSON))，**载荷含 `s` 字段承载「流序号 → 字幕 `ref`」的映射**）、`Index`（`MediaStreams[]` 里该字幕流的 `Index`）、`Format`（`srt`/`subrip`/`ass`/`ssa`/`vtt`/`webvtt`，大小写不敏感；`subrip`/`webvtt` 是 Emby 内部名，面板归一到 `srt`/`vtt`，见「十」#23 的 23-6）；`UserId` 可带（**只验 token、不比对 UserId**，与拉流同口径）；另有带起播位置的官方变体 `…/{Index}/{StartPositionTicks}/Stream.{Format}`（`StartPositionTicks` **忽略**） | **200 `text/*`**：解出 `s[Index]` 得 `ref` → 按第一段路由到字幕插件 → 调 `fetch({ ref })` → 回插件给的 `body`（`Content-Type` 优先取插件 `contentType`，否则按 `Format` 落：`srt→application/x-subrip` / `ass`/`ssa→text/x-ssa` / `vtt→text/vtt`，均加 `; charset=utf-8`）；`{Index}` 认不出 → **404**；版本 Id 认不出 → **400**；Id 非集/电影 → **404**；插件取内容失败 → **照实回失败码**（`metaBridge.httpStatusOf`：插件没在跑 / 没这个动作 → 503、超时 → 504、其余 → 502） | 字幕插件落地（**新增**：Emby 标准外挂字幕取用形状；此前落到通配 → 501）。**真机对照见「十」#23：无真机样本、未复测**（23-6 放宽 `subrip`/`webvtt` 两种内部名） |
 
 **实现约定**
 
@@ -466,6 +466,10 @@ docker logs -t media-bridge-panel              # 带时间戳
 > - **「容器清单补 iso」契约变更（一并声明，`Container` 值域扩大）**：集名规格解析（`parseEpisodeMeta`）的容器清单补 `iso`（光盘原盘镜像）。
 >   - **改的是什么**：`.iso` 播放项的 `container` 此前解析为空（且标准文件名兜底拼成 `.mkv`），现在如实为 `iso`；`MediaSources[].Container`、版本 `Path`/`DirectStreamUrl` 的 `stream.{Container}` 后缀相应可能出现 `iso`。
 >   - **影响端点**：`GET /api/emby/Users/{UserId}/Items/{ItemId}` 与 `POST /api/emby/Items/{ItemId}/PlaybackInfo` 的 `MediaSources[].Container` / `Path` / `DirectStreamUrl`（仅当源条目是 `.iso` 时取值变化）；形状与鉴权口径不变。**客户端无需改动**（能否播 ISO 由客户端自行决定）。
+> - **「字幕 `Stream.{Format}` 认下 Emby 内部名 `subrip` / `webvtt`」契约变更（回归修复，放宽路径格式）**：字幕内容端点的 `{Format}` 由只认 `srt` / `ass` / `ssa` / `vtt`，改为**另认 `subrip` / `webvtt` 并归一到 `srt` / `vtt`**。
+>   - **改的是什么**：版本里字幕流的 `Codec` 申报的是 Emby 内部名（`srt→subrip`、`vtt→webvtt`，见 23-2），客户端据此拼 URL 时会用 `Stream.subrip` / `Stream.webvtt`；此前端点正则只收 `srt` / `vtt`，这两种一律落 `未实现` → **501**（实测 **SenPlayer**：SRT 轨请求 `…/Subtitles/{Index}/Stream.subrip` 连吃 501，同批 ASS 轨走 `Stream.ass` 正常 200）。现按客户端实际发来的形状放宽正则，并把 `subrip` / `webvtt` 归一到契约认的 `srt` / `vtt`（`Content-Type` 兜底映射同步命中）。
+>   - **影响端点**：仅 `GET /api/emby/Videos|videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}`。响应形状、鉴权口径（只验 token、不比对 UserId）、`MediaSourceId` 载荷均不变。
+>   - **影响方向**：此前吃 501 的 SRT / VTT 字幕轨恢复可取；ASS / SSA 轨行为不变。**客户端无需改动。** 逐条见「十」#23 的 23-6（**已落码，未复测**）。
 > - **上游失败一律照实回失败**：**不编占位数据、不回空的假成功**。状态码 = 上游的真实原因，由 `metaBridge.httpStatusOf()` 一处决定：
 
 | 失败原因 | 回的码 |
@@ -799,8 +803,12 @@ docker logs -t media-bridge-panel              # 带时间戳
     - `client` 非清单 → **302**：面板只回一个 `Location`，视频字节全在客户端与源之间跑；
     - `client` `.m3u8` → **200 清单中继**（相对补绝对，[ADR-0040](adr/0040-hls-playlist-relay.md)）；
     - `proxy` 非清单 → **面板代持请求头字节中继**：客户端带不了那串鉴权头，由面板带头发给上游。
-      搬运是**分块并发**的（探总长 → 有界 Range 切块 → 多路在飞 → 按序吐，默认 16 路 / 512KB；
-      探不出总长才退回单连接透传），见 [ADR-0045](adr/0045-relay-chunked-concurrent.md)；
+      搬运按**对象大小**分两档（[ADR-0077](adr/0077-relay-small-object-single-connection.md) /
+      [ADR-0078](adr/0078-segment-object-single-connection.md)）：**8MB 以内**的对象（HLS 分片就在这一档）
+      **单连接边下边发**（一发有界 Range 就取回整份，不探、不切、不重下）；
+      更大的才**分块并发**（有界 Range 切块 → 多路在飞 → 按序吐，默认 16 路），
+      且那一发当**流式前缀**先吐、后面的块并发续上；
+      上游不认 Range / 探不出总长则退回单连接透传。切块并发见 [ADR-0045](adr/0045-relay-chunked-concurrent.md)；
     - `proxy` `.m3u8` → **200 清单中继**，且清单里每个地址改成落在**本端口** `/api/emby/stream?seg=&sid=`
       上的**签名子地址**，客户端取分片时由面板补头（不给分片带头，清单拿回来也播不了）。
     - 两档的搬运参数都可以在**拉流地址上带 `?threads=&chunkKB=` 覆盖这一次播放**

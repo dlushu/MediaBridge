@@ -165,6 +165,10 @@ function detailCacheKey({ name, year, season, episode, scoped, sources, cfg, par
     'aggdetail5',
     String(name || ''),
     String(year || ''),
+    /* 直绑身份（域 + 条目编号）：它决定"先问哪些声明了该域的源插件"，是**条目级**的身份 ——
+     * 必须进 key。**只在按 id 直绑那条路上才有值**（emby 链传 `entryId`）：非直绑调用（web / 出口插件
+     * 只给 name）这一格是空的，key 与从前一致、不会无故失效。 */
+    dim(opts.entryId) ? `${dim(opts.domain)}\u0002${dim(opts.entryId)}` : '',
     dim(season),
     dim(episode),
     /* 参与站点（顺序无关 → 排序）+ 源地址（改了地址等于换了后端，旧结果不能再用） */
@@ -309,8 +313,12 @@ async function detail(opts = {}) {
   const source = String(opts.source || '').trim();
   const site = String(opts.site || '').trim();
   const vodId = String(opts.vodId || '').trim();
-  if (!name && !(source && site && vodId)) {
-    return fail('BAD_INPUT', 400, '请提供 name（影视名），或用 source + site + vodId 直接指定绑定');
+  /* 直绑坐标（契约 `binds`）：元数据域的域 + 条目编号。给了它，聚合层会先问**声明认领该域**的
+   * 源插件（按 entryId 直调 detail），失败才回落按名搜（契约义务，见 contract-source.md）。 */
+  const entryId = String(opts.entryId || '').trim();
+  const domain = String(opts.domain || '').trim();
+  if (!name && !(source && site && vodId) && !(domain && entryId)) {
+    return fail('BAD_INPUT', 400, '请提供 name（影视名），或 source + site + vodId 直接指定绑定，或 domain + entryId 直绑');
   }
 
   const dom = scopeOf(opts);
@@ -372,6 +380,9 @@ async function detail(opts = {}) {
       source,
       site,
       vodId,
+      /* 直绑坐标：聚合层据此先问声明认领该域的源插件（见 aggregateDetail） */
+      domain,
+      entryId,
       season: opts.season,
       episode: opts.episode,
       /* 取法：`items` = 电影（每条线路列出全部播放项）；缺省 = 剧集（按季集号定位一条）。 */

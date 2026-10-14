@@ -348,6 +348,10 @@ function needsAuth(pathname) {
    * 没有浏览器会话；凭证由路由**自己验**：按坐标取地址那一发验 ingress 令牌，清单改写出来的
    * 子地址（`?seg=`）验面板签名（`signStreamPart`）。见 agg/routes.js 的 `/api/agg/stream`。 */
   if (pathname.startsWith('/api/agg/stream')) return false;
+  /* 同上一条：HLS 清单改写出的**域名端点**（`/api/agg/hls/{host}/{path}`）。
+   * 它与 `/api/agg/stream?seg=` 是同族 —— 面板自己签发的地址（签名 `mbh`/`mbm`），
+   * 唯一凭证就是那道签名：外部播放器照着清单取分片时没有面板 cookie，落到门禁上必吃 401。 */
+  if (pathname.startsWith('/api/agg/hls')) return false;
   if (pathname.startsWith('/api/emby/')) return EMBY_PANEL_RE.some((re) => re.test(pathname));
   /* ⚠️ 原先这里还带 `/website`：那是"配置中心同源代理"的路径，随源插件化去掉了
    * （配置中心现在由插件的设置页直连实例端口，不再过面板）。 */

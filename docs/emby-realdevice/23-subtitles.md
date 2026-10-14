@@ -13,7 +13,7 @@
 
 **差异处理**
 
-- 23-1 **字幕内容端点（已落码，未复测）**：新增 `GET /api/emby/Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}` —— `{ItemId}` 是本面板发出去的条目 Id（集/电影）；`{MediaSourceId}` 是版本 Id（`mbp:` + base64url(deflateRaw(JSON))，**载荷新增 `s` 字段**承载"流序号 → 字幕 `ref`"的映射）；`{Index}` 是 `MediaStreams[]` 里该字幕流的 `Index`；`{Format}` ∈ `srt` / `ass` / `ssa` / `vtt`（大小写不敏感）。面板解出 `s[Index]` 得 `ref` → 按第一段路由到字幕插件 → 调 `fetch({ ref })` → **200 `text/*`** 回 `body`（`Content-Type` 优先取插件给的 `contentType`，否则按 `Format` 落）。**鉴权只验 token、不比对 UserId**（与拉流同口径）。
+- 23-1 **字幕内容端点（已落码，未复测）**：新增 `GET /api/emby/Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}` —— `{ItemId}` 是本面板发出去的条目 Id（集/电影）；`{MediaSourceId}` 是版本 Id（`mbp:` + base64url(deflateRaw(JSON))，**载荷新增 `s` 字段**承载"流序号 → 字幕 `ref`"的映射）；`{Index}` 是 `MediaStreams[]` 里该字幕流的 `Index`；`{Format}` ∈ `srt` / `subrip` / `ass` / `ssa` / `vtt` / `webvtt`（大小写不敏感；`subrip` / `webvtt` 是 Emby 内部名，归一到 `srt` / `vtt`，见 23-6）。面板解出 `s[Index]` 得 `ref` → 按第一段路由到字幕插件 → 调 `fetch({ ref })` → **200 `text/*`** 回 `body`（`Content-Type` 优先取插件给的 `contentType`，否则按 `Format` 落）。**鉴权只验 token、不比对 UserId**（与拉流同口径）。
   - `{Index}` 认不出（版本 Id 里没有这条字幕 ref）→ **404**；版本 Id 认不出 → **400**；Id 非集/电影 → **404**；插件取内容失败 → **照实回失败码**（`metaBridge.httpStatusOf`：插件没在跑 / 没这个动作 → 503，超时 → 504，其余 → 502）。
   - Emby 官方还有一条带起播位置的变体 `…/Subtitles/{Index}/{StartPositionTicks}/Stream.{Format}`：**一并注册**（同一处理，`StartPositionTicks` 忽略 —— 面板回的是整段字幕，裁剪交给客户端）。
 - 23-2 **版本里挂字幕流（已落码，未复测）**：条目详情 / 播放信息里，每条版本（`MediaSource`）的 `MediaStreams[]` 追加字幕流：`Type:'Subtitle'`、`Index`（**顺延在视频/音频流之后**）、`Codec`（按 `format` 映射：`srt→subrip` / `ass→ass` / `ssa→ssa` / `vtt→webvtt`）、`Language`（插件给的 `lang` **原样**）、`DisplayTitle`（插件给的 `label`，不写按 `lang`）、`IsDefault:false` / `IsForced:false`（外挂字幕非默认/强制轨，23-4）、`IsExternal:true` / `IsTextSubtitleStream:true` / `SupportsExternalStream:true` / `DeliveryMethod:'External'`、`DeliveryUrl`（指向 23-1 那条端点，相对路径）。
@@ -23,9 +23,13 @@
 - 23-5 **字幕 `DeliveryUrl` 埋 access token（已落码，未复测）**：首版字幕流的 `DeliveryUrl`（23-2）是**裸相对路径**、**不带 token**；Streama（`Streama/1.0.55 android`）**把 `DeliveryUrl` 原样发出**，不自己追加 token → 本层 `authorize` 判「没带 token」→ **401**（HAR `proxypin_1006403_8090_2026-10-09.har` 实测：entry[8]–[13]、[15] 连打 7 次这条端点，请求头只有 `User-Agent` / `Icy-MetaData` / `Accept-Encoding` / `Host` / `Connection`，**无 `X-Emby-Token` / `X-Emby-Authorization` 头、也无 `api_key` query**）。对照：同一次会话里客户端拉流（`GET /emby/videos/…/stream.m3u8?…&api_key=…`，面板 `DirectStreamUrl` 埋了 `api_key`，客户端原样用）是 **200** —— 差别就在"URL 带不带 token"。
   - **处理**：字幕 `DeliveryUrl` 与 `DirectStreamUrl` 同口径，末尾埋**本请求的 access token**：`…/Stream.{Format}?api_key=<token>`（`DirectStreamUrl` 也用 query `api_key`，见 ADR-0062 / ADR-0074）。**鉴权口径不变**——端点仍只验 token、不比对 UserId；变的只是**面板发出的 URL 自带 token**，客户端不必自己加。
   - **影响面**：`subtitleUrl` 增 `token` 参数并埋 `?api_key=`；签名链 `getItem(itemId, token)` → `buildMediaSource({ …, token })` → `subtitleUrl(…, token)`；`routes.js` 的条目详情调用点把 `service.tokenFrom(req).token` 传进去，`getPlaybackInfo` 内 `getItem(itemId, token)`。**无 token 时不埋**（与 `directStreamUrl` 一致：拿不到 token 的调用方本就过不了 `authorize`）。
+- 23-6 **`Stream.{Format}` 认下 `subrip` / `webvtt`（已落码，未复测）**：`{Format}` 此前只认 `srt` / `ass` / `ssa` / `vtt`。但面板给版本里的字幕流申报的 `Codec` 是 **Emby 内部名**（`srt→subrip`、`vtt→webvtt`，见 23-2），客户端据此拼 URL 时会用 `Stream.subrip` / `Stream.webvtt` → 正则不认 → `notImplemented` → **501**。
+  - **实测**（**SenPlayer**）：同一部电影一次播放里，SRT 轨（`…/Subtitles/{Index}/Stream.subrip`）连吃 501（日志 `✘ emby 未实现`），同批 ASS 轨（`Stream.ass`）正常 200 —— 差别只在格式名。
+  - **处理**：正则放宽为 `/^Stream\.(srt|subrip|ass|ssa|vtt|webvtt)$/i`，并把 `subrip` / `webvtt` 归一到契约认的 `srt` / `vtt`（`Content-Type` 兜底映射同步命中）。是**面板自身「申报 `subrip` / 只收 `srt`」口径不一致的回归修复**。
+  - **影响面**：仅这一条端点；响应形状、鉴权口径（只验 token、不比对 UserId）、`MediaSourceId` 载荷均不变。此前吃 501 的 SRT / VTT 轨恢复可取，ASS / SSA 轨行为不变。
 
-**为什么是这个形状**：`Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}` 是 Emby 的**标准**字幕取用形状（外挂字幕流即由它交付）。面板路由**不支持段内**的 `Stream.:format`（见 `core/router.js`），故按 `serveDirectVideo` 的老范式：把 `:file` 收成**整段**，在处理器里用正则 `/^Stream\.(srt|ass|ssa|vtt)$/i` 校验。`Videos` 字面段**大小写不敏感**，官方大写与早期小写一并认下。
+**为什么是这个形状**：`Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}` 是 Emby 的**标准**字幕取用形状（外挂字幕流即由它交付）。面板路由**不支持段内**的 `Stream.:format`（见 `core/router.js`），故按 `serveDirectVideo` 的老范式：把 `:file` 收成**整段**，在处理器里用正则 `/^Stream\.(srt|subrip|ass|ssa|vtt|webvtt)$/i` 校验（`subrip` / `webvtt` 为 23-6 补的内部名）。`Videos` 字面段**大小写不敏感**，官方大写与早期小写一并认下。
 
 **不能模拟**：真机这条端点的**响应头与状态码细节**（`Content-Type` 取值、是否 `Content-Disposition`、无效 `Index` / 无效 token 时真机的确切回应）尚未取到，待补测。真机是否对**内嵌**字幕也走这条端点、`DeliveryMethod` 取值（`External` 还是别的）也未对照。
 
-**状态：23-1 / 23-2 / 23-3 / 23-4 / 23-5 已落码（未复测）。**
+**状态：23-1 / 23-2 / 23-3 / 23-4 / 23-5 / 23-6 已落码（未复测）。**

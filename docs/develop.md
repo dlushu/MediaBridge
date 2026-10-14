@@ -88,7 +88,7 @@
 | DELETE | `/api/agg/templates/:id` | 删一份模板（各域对它的指向一并清掉） |
 | POST | `/api/agg/domains/:domain` | 把某个域指到某份模板上（`templateId` 传空 = 取消这个域的指向） |
 | POST | `/api/agg/search` | **聚合搜索（带打分）**：`{tpl\|domain, wd, page?, year?, season?, episode?, minScore?, maxItems?, timeoutMs?, concurrency?, keys?}` → `{wd, page, elapsedMs, sites, matched, unmatched, match, stats}`；**作用域二选一**：`tpl` = 直接点名一套模板（web 的「聚合搜索」页就这么选），`domain` = 按域查（客户端那条路）—— 两者都落到同一份模板上（参数与站点都来自它，见 `agg/api.js` 的 `scopeOf`）；`keys` 是**站点白名单** `[{source,key}, …]`；每条结果带 `score`/`matched`/`matchReason` |
-| POST | `/api/agg/detail` | 取详情（内部含搜索）：`{tpl\|domain, name, year?, season?, episode?, minScore?, maxItems?, extraK?, extraAll?, timeoutMs?, detailTimeoutMs?, keys?, source?+site?+vodId?}` → `{ok:true, sites, picked, stats, sources, elapsedMs, subtitles?}`（每站一条 `detail`：线路 → 选集；**每站条目带 `sourceName`**，**每个可播目标带拼好的 `versionLabel`** —— 版本行标题位，供 emby 层与出口插件共用，见 [ADR-0063](adr/0063-version-label-at-aggregate-output.md)）；作用域同上（`tpl` 或 `domain`）；调用方输入有误 → 400 `{error}`。**命中的站一律全取**（没有「全取」开关）。**有站拿到详情且给了 `name` 时**另回一份 `subtitles`（这个播放目标的字幕轨 `[{lang, format, label?, source?}]`，面板为一个目标问一次字幕插件、挂在整个目标上；`source` 是**申报该轨的字幕插件名**，供面板「这条的版本」弹窗标来源，多个字幕插件时可区分；**`ref` 已在 HTTP 出口剥掉**，见 [ADR-0073](adr/0073-subtitle-tracks-in-agg-detail.md)） |
+| POST | `/api/agg/detail` | 取详情（内部含搜索）：`{tpl\|domain, name, year?, season?, episode?, minScore?, maxItems?, extraK?, extraAll?, timeoutMs?, detailTimeoutMs?, keys?, source?+site?+vodId?, entryId?}` → `{ok:true, sites, picked, stats, sources, elapsedMs, subtitles?}`（每站一条 `detail`：线路 → 选集；**每站条目带 `sourceName`**，**每个可播目标带拼好的 `versionLabel`** —— 版本行标题位，供 emby 层与出口插件共用，见 [ADR-0063](adr/0063-version-label-at-aggregate-output.md)）；作用域同上（`tpl` 或 `domain`）；调用方输入有误 → 400 `{error}`。**`domain` + `entryId` 一起给时启用「直绑」**（先问声明认领该域的源插件、按 entryId 直调 `detail`，失败回落按名搜，见 [ADR-0076](adr/0076-source-bind-by-entry-id.md)）—— emby 链的 `getItem` 就是这么传的；web / 出口插件只给 `name`，解不出条目身份，走原来的按名搜。**命中的站一律全取**（没有「全取」开关）。**有站拿到详情且给了 `name` 时**另回一份 `subtitles`（这个播放目标的字幕轨 `[{lang, format, label?, source?}]`，面板为一个目标问一次字幕插件、挂在整个目标上；`source` 是**申报该轨的字幕插件名**，供面板「这条的版本」弹窗标来源，多个字幕插件时可区分；**`ref` 已在 HTTP 出口剥掉**，见 [ADR-0073](adr/0073-subtitle-tracks-in-agg-detail.md)） |
 | POST | `/api/agg/play` | 取播放地址：`{domain, ref, clientHost?}` → `{ok:true, play:{urls, header, parse, nonHttp}}`。地址会过期，**每次播放都现取**（缓存在插件那边） |
 | GET | `/api/agg/stream` | **外部客户端直接拉流**（出口插件 / FW / Rex widget 等）：① `?domain\|tpl=&ref=&token=` 按版本坐标取地址（`playVia` 决定 302 / 清单中继 / 代持头中继）；② `?seg=&sid=` 上一跳清单改写出的签名子地址（自验 HMAC、不要求令牌）。凭证是**外部访问令牌**（query `token` / `Bearer` / `X-Access-Token`）；这条路径在 `core/auth.js` 的 `needsAuth` 里**豁免面板 cookie 门禁**、由本路由自验凭证。**另有同 handler 的带后缀别名 `GET /api/agg/stream.m3u8`**（部分播放器 / 客户端按 URL 后缀认容器，见 [ADR-0075](adr/0075-stream-suffix-alias.md)） |
 | GET | `/api/agg/site-test` | **站点测速状态**（服务端后台任务）：`{enabled, hours, concurrency, timeoutMs, running, done, total, okCount, emptyCount, badCount, stopped, lastRunAt, lastElapsedMs, nextRunAt, pending}` |
@@ -128,6 +128,13 @@ emby 层直接 `require` 该模块而**不经过 HTTP**（原因见 [ARCHITECTUR
 - **web 上可直接查看版本**：每条搜索结果上的「**这条的版本**」走 `source+site+vodId` 快路径（跳过搜索），
   以**弹窗**列出客户端会看到的内容 —— 每站「定位到这一集 N 条线路」+ 逐条线路的定位情况。
   核对「客户端点开到底会看到什么」看这里（同一套 `agg/api.js`，与 Emby 进程内直调是同一条链）。
+- **先直绑、再按名搜**（契约 `binds`，见 [ADR-0076](adr/0076-source-bind-by-entry-id.md)）：调用方
+  `name` 之外还给了 `domain` + `entryId` 时（只有 emby 链的 `getItem` 这么传），聚合层**先**问
+  「在 `plugin.json` 里声明认领该域」的源插件，按 entryId 直调它的 `detail`；拿到可用线路的站
+  **成功即用、不再按名搜**，失败的站**回落**到下面的按名搜索（判据 / 分数线 / 条数一律不变）。
+  直绑与按名搜**只对同一个站二选一执行、不双算**；条目里解不出 entryId 时直接跳过直绑。
+  这是给**搜索精度差**的站点（按名搜必然命中 0，如 Pornhub）准备的**唯一**取数通道；
+  `stats.bind = { sites, usable }`（声明该域的站数 / 直绑成功站数），`picked.matchedBy` 可取 `bind`。
 - **接续补打 = 前面一条能用的都没拿到时才兜底往下打**（见 [ADR-0027](adr/0027-extra-fetch-only-when-zero.md)，
   它取代 [ADR-0005](adr/0005-continuation-fetch.md) 的触发与停止口径）：
   命中 ≠ 能播 —— 前 `matchMaxItems`（N）条取详情后**一条能用的都没有**（没有线路 / 未定位到这一集）时，

@@ -136,8 +136,10 @@ function sendResult(res, out) {
  *     一跳过去它就拼到面板身上了（实测 VidHub 的 ffmpeg 去打 `/videos/{Id}/360p/video.m3u8` → 501）。
  *     ⚠️ 面板搬的是**一份清单**（几百字节），不是媒体流量。
  *   · `out.relay`    —— 200，**面板代持请求头**去取字节并搬到客户端（`proxy` 档的非清单线路）：
- *     客户端带不了那串鉴权头，只能由面板带头发给上游。搬运是**分块并发**的（有界 Range 切块，
- *     参数见面板设置 `streamRelay`），实现在 `../agg/stream.js` 的 `relayBytes`（与 agg 流端点同一份）。
+ *     客户端带不了那串鉴权头，只能由面板带头发给上游。搬运按对象大小分两档（见 ADR-0078）：
+ *     8MB 以内的（含 HLS 分片）**单连接边下边发**（不探、不切、不重下）；更大的才**分块并发**
+ *     （有界 Range 切块，参数见面板设置 `streamRelay`），且第一发当**流式前缀**先吐。
+ *     实现在 `../agg/stream.js` 的 `relayBytes`（与 agg 流端点同一份）。
  *
  * 本地部署的源回的地址是回环地址，这里拿到的已经是**换过域名**的那份（见源插件的地址改写）。
  *
@@ -554,8 +556,10 @@ module.exports = function routes(r) {
    * （`Content-Type` 优先取插件给的，见 `service.getSubtitle`）。
    *
    * 路由**不支持段内** `Stream.:format`（见 `core/router.js`），故按 `serveDirectVideo` 的老范式：
-   * `:file` 收成**整段**，这里用正则校验 `Stream.{srt|ass|ssa|vtt}`，其余（`original.srt` 之类）
-   * 仍按「未实现」记日志 + 501，不提前猜。`Videos` 字面段**大小写不敏感**，官方大写与早期小写一并认下。
+   * `:file` 收成**整段**，这里用正则校验 `Stream.{srt|subrip|ass|ssa|vtt|webvtt}`，其余（`original.srt` 之类）
+   * 仍按「未实现」记日志 + 501，不提前猜。`subrip` / `webvtt` 是 Emby 对 SRT / VTT 的内部名 ——
+   * 面板给版本里的字幕流申报的 `Codec` 就是它们（见 service.SUBTITLE_CODEC），客户端会把 `Codec`
+   * 原样拼回 URL，故一并认下。`Videos` 字面段**大小写不敏感**，官方大写与早期小写一并认下。
    *
    * Emby 官方还有一条带起播位置的变体 `…/Subtitles/{Index}/{StartPositionTicks}/Stream.{Format}`：
    * **一并注册**（同一处理，`StartPositionTicks` 忽略 —— 面板回的是整段字幕，裁剪交给客户端）。
@@ -570,14 +574,18 @@ module.exports = function routes(r) {
       return sendResult(res, denied);
     }
 
-    const m = /^Stream\.(srt|ass|ssa|vtt)$/i.exec(params.file);
+    const m = /^Stream\.(srt|subrip|ass|ssa|vtt|webvtt)$/i.exec(params.file);
     if (!m) return notImplemented(req, res, { pathname, query });
+
+    /* 客户端把版本里申报的 `Codec` 名原样拼回 URL：Emby 用 `subrip` 指 SRT、`webvtt` 指 VTT
+     * （见 service.SUBTITLE_CODEC），归一到契约认的 `srt` / `vtt` 再交给 service。 */
+    const format = { subrip: 'srt', webvtt: 'vtt' }[m[1].toLowerCase()] || m[1].toLowerCase();
 
     const out = await service.getSubtitle(
       params.itemId,
       params.mediaSourceId,
       params.index,
-      m[1].toLowerCase()
+      format
     );
     log.logResult(req, `字幕 Videos/${params.itemId}/Subtitles/${params.index}`, out);
     if (out.buffer) return sendBuffer(res, out.status, out.buffer, out.contentType);
@@ -604,6 +612,26 @@ module.exports = function routes(r) {
     const seg = String(query.get('seg') || '').trim();
     if (!seg) return notImplemented(req, res, { pathname: '/api/emby/stream', query });
     return streamKernel.servePart(req, res, { seg, sid: String(query.get('sid') || '').trim() });
+  });
+
+  /* HLS 域名端点：清单里的分片改写成 /api/emby/hls/{host}/{path}，进来后单连接去取。
+   * 必须在通配之前。实例端口的根路径兜底会把 /hls/… 收成这条。 */
+  r.add('GET', '/api/emby/hls/:host/*path', (req, res, { params, query }) => {
+    return streamKernel.serveHls(req, res, { host: params.host, path: params.path, query });
+  });
+
+  /**
+   * 图片中继：`GET /api/emby/img/{host}/{path}` —— 给**要 Referer 的图床**补上 Referer 取图。
+   *
+   * 插件把这类封面改写成**根相对**的这个地址（见 `stream.js` 的 `serveImage`），客户端按它连的
+   * Emby 实例端口解析就落到这里。放在这一层的原因与 `/hls` 相同：**实例端口只收 `/api/emby/`**，
+   * 客户端够得着的只有这里。同样**豁免 token**（Emby 图片端点本来就不看凭证），
+   * 防开放代理靠**图床域名白名单**（插件算不出面板的 HMAC，签名那条路走不通）。
+   *
+   * ⚠️ **必须注册在通配 `ANY /api/emby/*rest` 之前**。
+   */
+  r.add('GET', '/api/emby/img/:host/*path', (req, res) => {
+    return streamKernel.serveImage(req, res);
   });
 
   /**
@@ -693,14 +721,30 @@ module.exports = function routes(r) {
      * ② 没带 tag / 验签不过 → 查**本地图片索引**（`service.imageUrlFromIndex`）：
      *    索引在发 tag 时顺带记下（见 `service.tagAndRemember`），URL 本来就在本地，
      *    所以这一步**零上游调用**。命中即可正常出图。
-     * ③ 都取不到 → 404，**不回退上游反查** —— 那条路随片库规模线性消耗配额
-     *    （实测 340 次请求 ≈ 55 次调用，6h 过期重来），而位置本就在索引里。
+     * ③ 索引也没有 → **尝试从上游取一次**（兜底：面板重启后索引清空，客户端还缓存着旧条目 Id）：
+     *    仅限电影/剧集的主图（Primary），避免批量背景图打爆上游。
+     * ④ 都取不到 → 404。
      * 图片端点豁免 token，所以"URL 必须由本面板签过或记过"是这里唯一的 SSRF 防线。 */
     let url = service.parseImageTag(params.itemId, rawTag);
     let via = 'tag';
     if (!url) {
       url = service.imageUrlFromIndex(params.itemId, params.type, params.index);
       via = '索引';
+    }
+    if (!url && params.type === 'Primary') {
+      /* 兜底：索引缺失时，尝试从上游取一次条目信息并缓存图片。
+       * 这发生在面板重启后、客户端还缓存着旧条目 Id 的场景。
+       * 只兜底 Primary 主图，避免批量背景图请求打爆上游。 */
+      try {
+        const out = await service.getItem(params.itemId);
+        /* getItem 内部会调 tagAndRemember（见 service.js 的 item.ImageTags 组装），索引已写入，重查一次 */
+        if (out.status === 200 && out.body && out.body.ImageTags) {
+          url = service.imageUrlFromIndex(params.itemId, params.type, params.index);
+          via = '兜底';
+        }
+      } catch {
+        /* 兜底失败不阻塞，继续走 404 */
+      }
     }
     if (!url) {
       /* 诊断要能一眼看出"是没带 tag，还是带了但对不上"——两者的修法完全不同 */
@@ -713,9 +757,29 @@ module.exports = function routes(r) {
       return sendJson(res, 404, { error: '这张图取不到：tag 验签不过，索引里也没有' });
     }
 
+    /* 出图这一跳：
+     *   · 插件给的**根相对**地址（`/api/emby/img/…`，封面指到面板自己的图片中继）→
+     *     **补一道面板签名**，再补成本跳的绝对地址。签名是这条中继唯一的凭证 ——
+     *     面板不拿站点域名当白名单（见 stream.js 的 `serveImage`）。
+     *   · 其余（图床绝对地址等）原样 302。面板不知道、也不该猜哪个域名要 Referer，
+     *     那是插件的事：要走中继就由插件改写成上面的相对地址来表达。 */
+    if (url.startsWith('/api/emby/img/')) {
+      url = streamKernel.originOf(req) + streamKernel.signImagePath(url);
+    } else if (url.startsWith('/')) {
+      url = streamKernel.originOf(req) + url;
+    }
+
     /* 一律 302（见上面那段）：面板只回 `Location`，字节全在源站与客户端之间跑。
-     * 两条取图路（tag / 本地索引）已经在上面对 URL 做过校验，仍是这里唯一的 SSRF 防线。 */
-    log.logResult(req, `图片 ${label}`, { status: 302, log: `via=${via}` });
+     * 两条取图路（tag / 本地索引）已经在上面对 URL 做过校验，仍是这里唯一的 SSRF 防线。
+     * ⚠️ 日志必须写出**这一发去了哪**：客户端拿 302 自己取图，它取不动时面板这边**什么都看不到**
+     * （没有后续请求）。只写 `via=tag` 看不出问题 —— 「中继」还是「直连 <某 host>」才是一眼定位的关键。 */
+    const toRelay = url.includes('/api/emby/img/');
+    let dest = url;
+    try {
+      const u = new URL(url);
+      dest = `${u.host}${u.pathname}`;
+    } catch { /* 认不出就原样记 */ }
+    log.logResult(req, `图片 ${label}`, { status: 302, log: `via=${via} → ${toRelay ? '中继' : '直连'} ${dest.slice(0, 90)}` });
     /* `Location` 里的非 ASCII 必须先编码（同 serveStream 那段）：HTTP 头只认 ASCII。
      * 用 `encodeLocation` 而非 `encodeURI`：后者把 `%` 也转义，会破坏源直链已有的签名。 */
     res.writeHead(302, { Location: encodeLocation(url), 'Cache-Control': 'public, max-age=86400' });

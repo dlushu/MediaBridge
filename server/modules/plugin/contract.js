@@ -20,6 +20,9 @@
  *   main     可选，入口文件名（默认 index.js）
  *   domain   types 含 metadata 时必填：**它注册的域 id**（就是条目 Id 的前缀，见 docs/adr/0031），
  *            且一个包最多注册一个域、域全局唯一
+ *   binds    types 含 source 时可选：声明"本插件的每个站点都能直接吃下这些**元数据域**的条目 Id"
+ *            （域 id 数组，形状同 domain）—— 面板对声明了的域先按 entryId 直调 detail、跳过按名搜索，
+ *            失败**必须回落**按名搜索。语义与口径见契约（devkit contract-source.md「直绑元数据域条目 Id」）
  *   series   元数据插件可选：剧集式（默认 true）还是电影式
  *   webui    可选。单类型包：字符串入口（如 `ui/index.html`）；
  *            多类型包：**对象**，每个类型各自一个入口（如
@@ -181,6 +184,19 @@ function readManifest(dir) {
     }
   }
 
+  /* binds（可选）：源插件声明能**直绑**的元数据域（域 id 数组，形状同 domain，去重去空）。
+   * 只有 source 类型用得到 —— 别的类型给了直接拒，免得"写了却没生效"还以为声明上了。 */
+  let binds = [];
+  if (raw.binds !== undefined && raw.binds !== null) {
+    if (!types.includes('source')) throw fail('binds 只有 source 类型插件用得到（它声明"能直绑哪些元数据域的条目 Id"）');
+    if (!Array.isArray(raw.binds)) throw fail('binds 必须是域 id 的数组（形状同 domain）');
+    for (const d0 of raw.binds) {
+      const d = String(d0 || '').trim();
+      if (!/^[a-z][a-z0-9]*$/i.test(d)) throw fail(`binds 里的域 id 不合法：「${d0}」（形状同 domain）`);
+      if (!binds.includes(d)) binds.push(d);
+    }
+  }
+
   /* webui：单类型包给字符串或对象都行；多类型包必须给 {类型:入口} 的对象，
    * key 必须是它声明的类型、文件必须存在。统一归一化成 {类型:相对路径}。 */
   const webui = {};
@@ -236,6 +252,7 @@ function readManifest(dir) {
     main,
     mainFile,
     domain,
+    binds,
     series: raw.series !== false,
     /** 归一化后的 webui：`{类型:入口相对路径}`（没有就是 `{}`） */
     webui,

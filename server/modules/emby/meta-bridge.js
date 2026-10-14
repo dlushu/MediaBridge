@@ -114,12 +114,16 @@ function imageBase(domain) {
 /**
  * 拼图片地址。
  *   · `filePath` 已是完整 http(s) 地址 → **原样返回**（插件给整串 URL 时面板不擅自改写）；
+ *   · `filePath` 是**根相对**地址（`/api/emby/img/…`，面板自己的图片中继）→ **原样返回**：
+ *     出图时由路由补成本跳的绝对地址（见 `emby/routes.js` 的 `imagesByType`）。
+ *     ⚠️ 这一形态**不能落进下面的"拼基地址"分支** —— 会被拼成空串，表现是插件把封面指到中继后
+ *     条目一个 `ImageTags` 都没有（实测直绑详情整条取不到图）。
  *   · 否则按该域的基地址拼（路径以 / 开头）；基地址取不到就如实回空。
  */
 function imageUrlOf(domain, size, filePath) {
   const p = String(filePath || '');
   if (!p) return '';
-  if (/^https?:\/\//i.test(p)) return p;
+  if (/^(https?:\/\/|\/)/i.test(p)) return p;
   const base = imageBase(domain);
   return base ? `${base}/${size}${p}` : '';
 }

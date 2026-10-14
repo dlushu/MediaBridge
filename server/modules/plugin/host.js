@@ -302,6 +302,7 @@ function stateOf(type, id) {
     name: (entry && entry.name) || pkgId,
     version: (entry && entry.version) || '',
     domain: (entry && entry.domain) || '',
+    binds: entry && Array.isArray(entry.binds) ? entry.binds.slice() : [],
     enabled: !!(entry && entry.enabled),
     origin: (entry && entry.origin) || '',
     status: st ? st.status : 'stopped',

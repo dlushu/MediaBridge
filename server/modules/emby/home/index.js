@@ -302,9 +302,9 @@ function normalizeItem(it) {
   if (it.overview !== undefined) out.overview = String(it.overview || '').trim();
   const rating = Number(it.rating);
   if (Number.isFinite(rating) && rating > 0) out.rating = rating;
-  const poster = httpUrl(it.poster);
+  const poster = imageRef(it.poster);
   if (poster) out.poster = poster;
-  const backdrop = httpUrl(it.backdrop);
+  const backdrop = imageRef(it.backdrop);
   if (backdrop) out.backdrop = backdrop;
   if (Array.isArray(it.genres)) {
     const g = it.genres.map((x) => String(x || '').trim()).filter(Boolean);
@@ -332,9 +332,19 @@ function normalizeItem(it) {
   return out;
 }
 
-const httpUrl = (v) => {
+/**
+ * 图片地址：**两种形态都收**（见契约「面板代取图片」）。
+ *   · 完整 http(s) URL —— 插件直接给图床地址，客户端自己取；
+ *   · **根相对**的 `/api/emby/img/…` —— 插件声明「这张图请面板代取」，出图那一跳再补签名与 origin。
+ *
+ * ⚠️ 这里**曾经**是个只认 http(s) 的 `httpUrl()`，把代取地址整条丢掉：条目进不了 ImageTags，
+ * 客户端连图片请求都不会发，那一整行封面全空 —— 而面板日志里**一条线索都没有**（实测踩过）。
+ * 那个过滤函数已删：图片字段一律走这个函数，别再引入"只认绝对地址"的第二套判据。
+ */
+const imageRef = (v) => {
   const s = String(v || '').trim();
-  return /^https?:\/\//i.test(s) ? s : '';
+  if (/^https?:\/\//i.test(s)) return s;
+  return /^\/api\/emby\/img\//.test(s) ? s : '';
 };
 
 /** 归一化一整行：接受数组或 `{items:[…]}`；按 id 去重；超过上限的计入 dropped */

@@ -354,6 +354,140 @@ module.exports = function routes(r) {
     sendJson(res, 200, logbus.list({ since: query.get('since'), limit: query.get('limit') }))
   );
 
+  /* 导出日志：带系统运行环境信息的完整日志文本（.log 文件下载） */
+  r.add('GET', '/api/logs/export', (req, res) => {
+    const os = require('os');
+    const logs = logbus.list({ limit: logbus.DEFAULT_MAX * 2 }); // 尽量多取
+
+    /* 系统运行环境信息 */
+    const env = {
+      面板版本: pkg.version,
+      Node版本: process.version,
+      平台: `${os.platform()} ${os.arch()}`,
+      系统版本: os.release(),
+      主机名: os.hostname(),
+      CPU: `${os.cpus()[0]?.model || '未知'} × ${os.cpus().length}`,
+      内存: `${Math.round(os.totalmem() / 1024 / 1024)}MB 总 / ${Math.round(os.freemem() / 1024 / 1024)}MB 可用`,
+      运行时长: `${Math.floor(process.uptime() / 60)} 分钟`,
+      进程PID: process.pid,
+      数据目录: DATA_DIR,
+      导出时间: new Date().toISOString(),
+      时区: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+
+    /* 模块清单（简要） */
+    const modules = registry.describe(settings.read).map((m) => `${m.id} v${m.version}`).join(', ');
+
+    let text = '========================================\n';
+    text += '        MediaBridge 面板日志导出\n';
+    text += '========================================\n\n';
+    text += '【系统运行环境】\n';
+    for (const [k, v] of Object.entries(env)) text += `${k}: ${v}\n`;
+    text += `\n【已加载模块】${modules}\n`;
+    text += `\n【日志统计】共 ${logs.total} 条（上限 ${logs.max} 条）\n`;
+    text += '========================================\n\n';
+
+    /* 日志内容（带级别标记） */
+    const levelMark = { error: '[✘]', warn: '[⚠]', log: '[·]', info: '[i]' };
+    for (const item of logs.items) {
+      const t = new Date(item.t);
+      const ts = `${t.getHours().toString().padStart(2, '0')}:${t.getMinutes().toString().padStart(2, '0')}:${t.getSeconds().toString().padStart(2, '0')}`;
+      text += `${ts} ${levelMark[item.level] || '[?]'} ${item.text}\n`;
+    }
+
+    const filename = `mbp-logs-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.log`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return sendBuffer(res, 200, Buffer.from(text, 'utf8'), 'text/plain; charset=utf-8');
+  });
+
+  /* 系统自检：检查关键路径与配置状态 */
+  r.add('GET', '/api/panel/selfcheck', (req, res) => {
+    const fs = require('fs');
+    const path = require('path');
+    const checks = [];
+
+    /* ① 数据目录可写 */
+    try {
+      const testFile = path.join(DATA_DIR, '.write-test');
+      fs.writeFileSync(testFile, 'ok');
+      fs.unlinkSync(testFile);
+      checks.push({ name: '数据目录可写', ok: true, detail: DATA_DIR });
+    } catch (e) {
+      checks.push({ name: '数据目录可写', ok: false, detail: e.message });
+    }
+
+    /* ② 设置目录可写 */
+    try {
+      const testFile = path.join(SETTINGS_DIR, '.write-test');
+      fs.writeFileSync(testFile, 'ok');
+      fs.unlinkSync(testFile);
+      checks.push({ name: '设置目录可写', ok: true, detail: SETTINGS_DIR });
+    } catch (e) {
+      checks.push({ name: '设置目录可写', ok: false, detail: e.message });
+    }
+
+    /* ③ 内存状态 */
+    const used = process.memoryUsage();
+    const heapMB = Math.round(used.heapUsed / 1024 / 1024);
+    checks.push({
+      name: '内存状态',
+      ok: heapMB < 512,
+      detail: `堆内存 ${heapMB}MB ${heapMB < 512 ? '(正常)' : '(偏高)'}`,
+    });
+
+    /* ④ 模块加载状态 */
+    const mods = registry.describe(settings.read);
+    const failed = mods.filter((m) => m.status === 'failed' || m.status === 'error');
+    checks.push({
+      name: '模块加载',
+      ok: failed.length === 0,
+      detail: failed.length ? `${failed.length} 个模块异常: ${failed.map((x) => x.id).join(', ')}` : `${mods.length} 个模块正常`,
+    });
+
+    /* ⑤ 日志缓冲 */
+    const logStats = logbus.stats();
+    checks.push({
+      name: '日志缓冲',
+      ok: true,
+      detail: `${logStats.total}/${logStats.max} 条`,
+    });
+
+    /* ⑥ 图片索引数据库可创建/可写（emby/cache.js 的 image_index 表） */
+    try {
+      const embyCache = require('../emby/cache');
+      const testKey = '.selfcheck-' + Date.now();
+      const testVal = 'https://example.com/test.jpg';
+      embyCache.putImage(testKey, testVal, 1000, 1024); // 1s TTL, 1KB 上限
+      const got = embyCache.getImage(testKey);
+      embyCache.putImage(testKey, '', 0, 0); // 清掉测试数据（置空 + 0 TTL）
+      checks.push({
+        name: '图片索引数据库',
+        ok: got === testVal,
+        detail: got === testVal ? '可正常读写' : '写入后读取不一致',
+      });
+    } catch (e) {
+      checks.push({ name: '图片索引数据库', ok: false, detail: e.message });
+    }
+
+    /* ⑦ 缓存数据库目录可写（cachedb 管理的 lines.db / cache.db） */
+    try {
+      const cachedb = require('../../core/cachedb');
+      const stats = cachedb.statsAll();
+      const paths = Object.values(stats).map((s) => s.path).filter(Boolean);
+      checks.push({
+        name: '缓存数据库目录',
+        ok: paths.length > 0,
+        detail: paths.length ? paths.join(' / ') : '无缓存库',
+      });
+    } catch (e) {
+      checks.push({ name: '缓存数据库目录', ok: false, detail: e.message });
+    }
+
+    const allOk = checks.every((x) => x.ok);
+    return sendJson(res, 200, { ok: allOk, checks, timestamp: new Date().toISOString() });
+  });
+
   r.add('DELETE', '/api/logs', (req, res) => {
     logbus.clear();
     return sendJson(res, 200, { ok: true });

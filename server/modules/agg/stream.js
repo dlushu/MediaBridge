@@ -15,9 +15,11 @@
  *         依据见面板 docs/adr/0040）。取不回来就如实退回 302，与改前一致、至少不变差。
  *
  *   · `proxy` —— 地址**必须带一串鉴权头才播得动**，而外部客户端带不了那些头 ⇒ 面板**代持头**：
- *       - 非 HLS → 取字节回给客户端：**先探总长，再按块切、多路并发发有界 Range**（见
- *         `relayBytes`；网盘 CDN 按 Range 形态限速，开放式 `bytes=0-` 只有 ~0.1MB/s）；
- *         探不出总长 / 上游不认 Range 就退回单连接原样透传（`relayPipe`，与改前一致）；
+ *       - 非 HLS → 取字节回给客户端：**先按"段级对象直搬上限"发一发有界 Range**（见 `relayBytes`；
+ *         网盘 CDN 按 Range 形态限速，开放式 `bytes=0-` 只有 ~0.1MB/s）—— 整份装得下（HLS 分片
+ *         正是这一档）就**单连接边下边发、不切不重下**；比上限还大才按块切、多路并发发有界 Range，
+ *         并且那一发当**流式前缀**先吐（`relayChunked`）；探不出总长 / 上游不认 Range 就退回
+ *         单连接原样透传（`relayPipe`，与改前一致）；
  *       - HLS 清单 → 取回后把**清单里每个地址**改写成面板自己的子地址（`?seg=…`，见下），
  *         客户端再来取时由面板带头发给上游 —— 不给分片带头，清单拿回来也播不了。
  *
@@ -232,6 +234,38 @@ function partLink(origin, url, sid, path) {
   return `${origin}${path || '/api/agg/stream'}?seg=${p}.${auth.signStreamPart(sid + ':' + url)}&sid=${sid}`;
 }
 
+/**
+ * 清单改写用的**域名端点**：分片地址改成
+ * `{origin}{base}/{host}/{path}?{上游查询}&h={头}`。
+ *
+ * 头不进内存表 —— 改写时就编进地址（`h` = Referer/User-Agent 的 base64url JSON，再签一道）。
+ * 客户端照清单来取时，面板按 host + 路径拼回上游地址，**单连接**去取。
+ * 没有这道签名，端点就是按域名开放的代理。
+ *
+ * `base` 缺省 `/api/agg/hls`。Emby 层传 `/api/emby/hls`：实例端口只收 `/api/emby/`。
+ */
+function hlsLink(origin, url, headers, base) {
+  let u;
+  try {
+    u = new URL(String(url));
+  } catch {
+    return String(url);
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return String(url);
+  const keep = {};
+  for (const k of ['Referer', 'User-Agent']) {
+    if (headers && headers[k]) keep[k] = String(headers[k]);
+  }
+  const h = Buffer.from(JSON.stringify(keep), 'utf8').toString('base64url');
+  const path = u.pathname.replace(/^\/+/, '');
+  /* 验签对着原始查询串，不经过 URLSearchParams：上游签名里的 %2B/%3D 被解码后再拼回去就对不上。
+   * 参数名用 mbh/mbm，避开上游自己的 h=（hv-h 那批地址就带）。 */
+  const q = u.search ? u.search.slice(1) : '';
+  const mac = auth.signStreamPart(`${u.host}\n${path}\n${q}\n${h}`);
+  const qs = q ? `${q}&` : '';
+  return `${origin}${base || '/api/agg/hls'}/${u.host}/${path}?${qs}mbh=${h}&mbm=${mac}`;
+}
+
 /** 验子地址，回真实地址（不合法回空串）。上限只防"超长串拿来塞爆日志/内存" */
 function partUrl(seg, sid) {
   const s = String(seg || '');
@@ -265,9 +299,172 @@ function originOf(req) {
  * @returns `{ text, count, sid }`：`count` 改了几处地址（只进日志），`sid` 进日志便于对账。
  */
 function relayPlaylist(text, base, { origin, headers, path, over }) {
+  /* HLS 走域名端点：头编进地址，分片进来后单连接去取。不再为每个分片存 sid。 */
+  if (isPlaylistUrl(base)) {
+    const hlsBase = path === '/api/emby/stream' ? '/api/emby/hls' : '/api/agg/hls';
+    const fixed = rewriteUris(text, base, (abs) => hlsLink(origin, abs, headers, hlsBase));
+    return { text: fixed.text, count: fixed.count, sid: 'hls' };
+  }
   const sid = putPart(headers, over);
   const fixed = rewriteUris(text, base, (abs) => partLink(origin, abs, sid, path));
   return { text: fixed.text, count: fixed.count, sid };
+}
+
+/**
+ * 域名端点进来的一发：验签 → 拼回上游地址 → **单连接**去取。
+ * 取回来的若还是清单，按同一规则再改写（子清单里的分片仍走这个端点）。
+ */
+async function serveHls(req, res, { host, path }) {
+  /* 用请求原文里的查询串：URLSearchParams 会把 %xx 解码，和签发时的原文对不上。 */
+  const raw = String((req.url || '').split('?')[1] || '');
+  const kept = [];
+  let h = '';
+  let mac = '';
+  for (const part of raw.split('&')) {
+    if (!part) continue;
+    if (part.startsWith('mbh=')) h = part.slice(4);
+    else if (part.startsWith('mbm=')) mac = part.slice(4);
+    else kept.push(part);
+  }
+  const q = kept.join('&');
+  const cleanHost = String(host || '').trim();
+  const cleanPath = String(path || '').replace(/^\/+/, '');
+  if (!cleanHost || !auth.verifyStreamPart(`${cleanHost}\n${cleanPath}\n${q}\n${h}`, mac)) {
+    return sendError(res, 403, '这个分片地址的签名对不上（面板换了密钥后请重取一次清单）');
+  }
+  let headers = {};
+  try {
+    headers = JSON.parse(Buffer.from(h, 'base64url').toString('utf8')) || {};
+  } catch {
+    return sendError(res, 403, '这个分片地址的头认不出');
+  }
+  const url = `https://${cleanHost}/${cleanPath}${q ? '?' + q : ''}`;
+  const method = String(req.method || 'GET').toUpperCase();
+  const want = Object.assign({}, headers);
+  if (req.headers.range) want.Range = req.headers.range;
+  let up;
+  try {
+    up = await fetch(url, { method: method === 'HEAD' ? 'HEAD' : 'GET', headers: want, redirect: 'follow' });
+  } catch (e) {
+    return sendError(res, 502, `中继取流失败：${String((e && e.message) || e)}`);
+  }
+  const ctype = String(up.headers.get('content-type') || '');
+  if (up.status === 200 && /mpegurl|m3u8/i.test(ctype)) {
+    const text = await up.text();
+    if (/^\s*#EXTM3U/.test(text)) {
+      const hlsBase = String(req.url || '').includes('/api/emby/') ? '/api/emby/hls' : '/api/agg/hls';
+      const fixed = rewriteUris(text, up.url || url, (abs) => hlsLink(originOf(req), abs, headers, hlsBase));
+      return sendBuffer(res, 200, Buffer.from(fixed.text, 'utf8'), PLAYLIST_MIME);
+    }
+  }
+  if (up.status !== 200 && up.status !== 206 && up.status !== 416) {
+    return sendError(res, 502, `中继取流失败：上游 HTTP ${up.status}`);
+  }
+  return pipeUpstream(res, up, { label: `hls/${cleanHost}`, note: '单连接' });
+}
+
+/**
+ * 图片中继用的 UA —— **通用浏览器 UA，不是站点知识**。
+ *
+ * 有些图床**不带 Referer 一律 403**，而封面是客户端拿着 `Items/{id}/Images/Primary` 302 出来的
+ * 地址**自己直连**的，带不上 Referer，那批封面恒空白。
+ *
+ * ⚠️ **面板这里不许出现任何站点域名**（早先一版拿 `\.phncdn\.com$` 当白名单、把某个站的
+ * `www.…com` 当 Referer，那是把插件该管的站点知识塞进了通用面板）。实测该图床只要求
+ * "有一个 Referer"，**内容完全不校验**：`https://<图床自己>/`、`https://example.com/`、
+ * `http://127.0.0.1:8097/` 全部 200，只有不带/只带 UA 才 403。
+ * 所以这里用**自引用**（`https://{上游 host}/`）—— 最中性的一个，换站点也不用改面板。
+ *
+ * 换别的站要是"Referer 必须精确匹配"，那是**插件该申报**的事，不是面板猜。
+ */
+const IMG_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+/** 图片中继的签名载荷（出图那一跳签、`serveImage` 验，两处同一份口径） */
+function imageSigPayload(host, path, query) {
+  return `img\n${host}\n${path}\n${query}`;
+}
+
+/**
+ * 给图片中继的**根相对**路径补一道签名，回带签名的路径（出图那一跳用）。
+ *
+ * 插件在生成封面时算不出面板的 HMAC，所以签名由**面板在 302 之前**补上
+ * （`emby/routes.js` 的 `imagesByType`）。这样这个端点**不是开放代理**：
+ * 没有本面板的签名就取不了任何 URL，同时又不必拿站点域名当白名单。
+ */
+function signImagePath(rel) {
+  const s = String(rel || '');
+  const qIdx = s.indexOf('?');
+  const p = qIdx >= 0 ? s.slice(0, qIdx) : s;
+  const q = qIdx >= 0 ? s.slice(qIdx + 1) : '';
+  const segs = p.split('/').filter(Boolean); // ['api','emby','img',host,…]
+  const host = decodeURIComponent(segs[3] || '').trim().toLowerCase();
+  const path = segs.slice(4).join('/');
+  if (!host || !path) return s;
+  const mac = auth.signStreamPart(imageSigPayload(host, path, q));
+  return `${p}?${q ? q + '&' : ''}mbm=${mac}`;
+}
+
+/**
+ * 图片中继：`/api/emby/img/{host}/{path}?…&mbm=<签名>` —— 带回 Referer 把图取回来，单连接、边下边发。
+ *
+ * 插件把要 Referer 的封面改成**根相对**的这个地址（`lib/ph.js` 的 `proxifyPoster`），
+ * 客户端按它连的 Emby 实例端口解析就落到这里。Emby 的图片端点本来就豁免 token
+ * （实测图片请求凭证不统一），这条同样不看凭证，**凭证就是那道签名**。
+ *
+ * 路径按 `req.url` **原文**切：图片地址常带签名 query，URLSearchParams 解码后再拼回去会对不上。
+ */
+async function serveImage(req, res) {
+  const rawUrl = String(req.url || '');
+  const qIdx = rawUrl.indexOf('?');
+  const rawPath = qIdx >= 0 ? rawUrl.slice(0, qIdx) : rawUrl;
+  const rawQuery = qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '';
+  /* 三个角色分开收：
+   *   · `mbh` —— **插件给的头**（`{referer, userAgent}` 的 base64url JSON）。站点认什么 Referer 只有
+   *     插件知道，面板不猜；缺省走自引用兜底（见 IMG_UA 那段）。
+   *   · `mbm` —— 面板的签名。
+   *   · 其余   —— 上游自己的参数，原样转发。
+   * `mbh` **留在签名载荷里**（见 `imageSigPayload`）：它被签名保护，客户端改一个字节就验不过。 */
+  const kept = [];
+  let mac = '';
+  let hdr = '';
+  for (const part of rawQuery.split('&')) {
+    if (!part) continue;
+    if (part.startsWith('mbm=')) mac = part.slice(4);
+    else if (part.startsWith('mbh=')) hdr = part.slice(4);
+    else kept.push(part);
+  }
+  const sigQ = kept.concat(hdr ? [`mbh=${hdr}`] : []).join('&');
+  const upQ = kept.join('&');
+  const segs = rawPath.split('/').filter(Boolean); // ['api','emby','img',host,…]
+  const cleanHost = decodeURIComponent(segs[3] || '').trim().toLowerCase();
+  const cleanPath = segs.slice(4).join('/');
+  if (!cleanHost || !cleanPath || !auth.verifyStreamPart(imageSigPayload(cleanHost, cleanPath, sigQ), mac)) {
+    return sendError(res, 403, '这个图片地址的签名对不上（面板换了密钥后请重取一次）');
+  }
+  /* 上游地址**不带 `mbh`**：那是面板与插件之间的参数，不该漏给图床。 */
+  const url = `https://${cleanHost}/${cleanPath}${upQ ? '?' + upQ : ''}`;
+  const method = String(req.method || 'GET').toUpperCase();
+  const want = { Referer: `https://${cleanHost}/`, 'User-Agent': IMG_UA };
+  if (hdr) {
+    try {
+      const j = JSON.parse(Buffer.from(hdr, 'base64url').toString('utf8')) || {};
+      if (j.referer) want.Referer = String(j.referer);
+      if (j.userAgent) want['User-Agent'] = String(j.userAgent);
+    } catch {
+      /* 头解不出就按缺省走，不因为一个可选参数把图判死 */
+    }
+  }
+  if (req.headers.range) want.Range = req.headers.range;
+  let up;
+  try {
+    up = await fetch(url, { method: method === 'HEAD' ? 'HEAD' : 'GET', headers: want, redirect: 'follow' });
+  } catch (e) {
+    return sendError(res, 502, `取图失败：${String((e && e.message) || e)}`);
+  }
+  if (up.status !== 200 && up.status !== 206) {
+    return sendError(res, 502, `取图失败：上游 HTTP ${up.status}`);
+  }
+  return pipeUpstream(res, up, { label: `img/${cleanHost}`, note: hdr ? '按插件给的头' : '按缺省头' });
 }
 
 /* --------------------------------------------------------- 字节中继（分块并发） */
@@ -286,8 +483,19 @@ const RELAY_DEFAULTS = { threads: 16, chunkKB: 512, timeout: 15000 };
 const RELAY_MAX_THREADS = 32;
 const RELAY_MIN_CHUNK_KB = 64;
 const RELAY_MAX_CHUNK_KB = 8192;
-/** 探测时先要多少字节（只为拿 `content-range` 里的总长，读完即断） */
-const RELAY_PROBE_BYTES = 1024;
+/**
+ * **段级对象直搬上限**：客户端这一发逻辑上要的数据不超过它 → **单连接流式**，不进切块档。
+ *
+ * 为什么按对象大小划这条线，而不是按"几块"：切块档**必须按序吐**（块的顺序不能乱），
+ * 某一块慢 / 走重试时，整条流在那一段**一个字节都吐不出来** —— 播放器等不到字节就掐连接、
+ * 去拉下一片（实测日志：开始写「共 2930168 字节」，结束时只「搬了 0.5MB」，见 ADR-0078）。
+ * 单连接是一条流：慢也只是连续地慢，没有这种硬停顿。HLS 分片正是这种段级对象（实测 1.1~2.8MB），
+ * 一片一条连接比十几条并发更稳，上游请求数也从十几发降到一发。
+ *
+ * 上限**之外**的真·大文件仍然走切块拿并发，但那一发不再白拉：它当**流式前缀**边吐边下，
+ * 后面的块同时并发取（见 `relayChunked` 的 `prefix`）—— 大文件也不会卡在"等第一块读满"。
+ */
+const RELAY_DIRECT_MAX_BYTES = 8 * 1024 * 1024;
 /** 首块自适应：播放器 `bytes=0-` 探测时，前 N 块用小尺寸
  *  （探测完读几百 KB 就 seek，大块全在飞浪费带宽，还拖慢首字节） */
 const RELAY_HEAD_SMALL_COUNT = 4;
@@ -394,38 +602,100 @@ function resolveRange(want, total) {
 }
 
 /**
- * 探一发 `Range: bytes=0-1023`，只为拿总长与"认不认 Range"。**读完即断**，一个字节都不留。
- * 回 `null` = 上游不认 Range（回 200）或形状认不出 —— 调用方据此退回单连接透传。
+ * `Content-Range: bytes a-b/total` → `{ start, end, total }`；形状不对 / 总长不是正数回 `null`。
+ *
+ * 分块并发要的总长就取自这里 —— 那一发**顺便**当探针（见 `relayBytes`），不再为"问一下多大"单开一发。
  */
-async function probeRange(url, headers) {
+function parseContentRange(v) {
+  const m = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(String(v || '').trim());
+  if (!m) return null;
+  const total = Number(m[3]);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  return { start: Number(m[1]), end: Number(m[2]), total };
+}
+
+/**
+ * 客户端这一发**逻辑上**要多少字节（总长已知才算得出来）。
+ * 口径与 `resolveRange` 一致：开放式 `bytes=N-` / 没带 Range / 认不出的 Range 都算"要到尾"。
+ */
+function wantedBytes(want, start, total) {
+  if (!want || want.suffix !== undefined || want.end === Infinity) return total - start;
+  return Math.max(0, Math.min(want.end, total - 1) - start + 1);
+}
+
+/**
+ * 发一发**有界 Range** 取回响应，**不读体**、不落地。它既是"要多少 / 认不认 Range"的问路，
+ * 也可能直接就是客户端要的**全部数据**（段级对象）—— 是探针还是数据，由调用方看响应头决定。
+ *
+ * 超时只管到响应头；体什么时候读、什么时候掐，一律交给调用方。
+ */
+async function openRange(url, headers, start, end) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), RELAY_DEFAULTS.timeout);
   try {
-    const res = await fetch(url, {
-      headers: Object.assign({}, headers, { Range: `bytes=0-${RELAY_PROBE_BYTES - 1}` }),
+    return await fetch(url, {
+      headers: Object.assign({}, headers, { Range: `bytes=${start}-${end}` }),
       redirect: 'follow',
       signal: ctrl.signal,
     });
-    /* ⚠️ 必须**先看状态再断流**：上游要是不认 Range，这一发回的是**整个文件**的 200，
-     * 断得晚一点就是白拉几百兆。 */
-    if (res.status !== 206) return null;
-    if (res.body) {
-      try {
-        await res.body.cancel();
-      } catch {
-        /* 断不干净也不影响结果 */
-      }
-    }
-    const m = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(String(res.headers.get('content-range') || '').trim());
-    if (!m) return null;
-    const total = Number(m[3]);
-    if (!Number.isFinite(total) || total <= 0) return null;
-    return { total, headers: res.headers };
   } catch {
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 把一发**已经取回**的上游响应原样搬给客户端：单连接、边下边发、背压交给 `pipe`，不攒整段。
+ *
+ * `relayPipe`（自己取一发）与 `relayBytes` 的单连接直搬档（那一发就是数据本身）共用这一处 ——
+ * 头怎么抄、客户端断开怎么断，只留这一份口径。
+ *
+ * @param note    只进日志的一段补充（例：带几个头 / 为什么这一档）
+ * @param noRange 客户端**没给出可用的 Range**：那一发是面板按有界 Range 要的，回的自然也是 206，
+ *   但对客户端得如实收成 200（不带 Range 的请求要的是整份；206 是"部分内容"，`Content-Range` 一并去掉）
+ */
+function pipeUpstream(res, up, { label, note, noRange }) {
+  const out = { 'Cache-Control': 'no-store' };
+  for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+    const v = up.headers.get(k);
+    if (v) out[k] = v;
+  }
+  /* ⚠️ 客户端**可能早就走了**（等太久 / 换台 / 播放器掐连接）：这时别往死连接上写 ——
+   * 直接掐掉上游这一发，连日志都不用打（正常播放不会走到这里）。 */
+  if (res.destroyed || res.writableEnded) {
+    if (up.body) up.body.cancel().catch(() => {});
+    return undefined;
+  }
+  const strip = Boolean(noRange) && up.status === 206;
+  if (strip) delete out['content-range'];
+  const status = strip ? 200 : up.status;
+  /* 这一发**声明**要搬多少：搬少了就是断在半路，那行"结束"要说清楚（见下） */
+  const expect = Number(out['content-length']) || 0;
+  console.log(`  ⇄ 中继 ${label || ''} → ${status}（${up.headers.get('content-type') || '?'}${note ? '，' + note : ''}）`);
+  res.writeHead(status, out);
+  if (!up.body) return res.end();
+
+  let bytes = 0;
+  const body = Readable.fromWeb(up.body);
+  body.on('data', (c) => {
+    bytes += c.length;
+  });
+  /* 客户端先走（换台 / 拖进度）→ 上游一起断，别把连接挂在面板上。
+   * ⚠️ 挂在 **`res`** 上而不是 `req`：`req` 的 `close` 在"请求体读完"时就发（GET 是空体，
+   * 等于一开始就发），照它断流会把正常播放掐死在半路。`res` 的 `close` 才是"这一跳真的结束了"；
+   * 正常播完时它也在 `end` 之后到，那时 `destroy()` 落在已结束的流上，无副作用。
+   * ⚠️ 这行是**这一跳**结束（客户端掐掉也算），不等于"播完"：搬的比声明的少就如实写出来。 */
+  res.on('close', () => {
+    body.destroy();
+    if (!bytes) return;
+    const mb = (bytes / 1048576).toFixed(1);
+    console.log(bytes < expect
+      ? `  ⇄ 中继结束 ${label || ''}：搬了 ${mb}MB / 共 ${(expect / 1048576).toFixed(1)}MB（客户端提前断开）`
+      : `  ⇄ 中继结束 ${label || ''}：搬了 ${mb}MB`);
+  });
+  body.on('error', () => res.destroy());
+  return body.pipe(res);
 }
 
 /**
@@ -501,7 +771,7 @@ async function fetchOneChunk(url, headers, start, end, signal, timeout, readTime
       clearTimeout(timer);
     }
     if (res.status !== 206) {
-      /* 探针已确认上游认 Range，中途回 200 属异常：**先掐再判**，免得把整片读进来 */
+      /* 开切块前那一发已确认上游认 Range，中途回 200 属异常：**先掐再判**，免得把整片读进来 */
       if (res.body) {
         try {
           await res.body.cancel();
@@ -554,8 +824,17 @@ async function fetchOneChunk(url, headers, start, end, signal, timeout, readTime
  * 慢判死 / 头部对冲 / 重试口径**对齐 media-bridge-relay**（见各 `RELAY_*` 常量注释）：
  * 前 4 块各发 2 路竞速取先成功者；每块有硬超时（头部 10s / 普通 30s），慢块判失败走重试，
  * 不再让按序等它的那一步无限期挂着。
+ *
+ * `probe` = 开切块之前那一发的成果（`{ total, headers }`，见 `relayBytes`）：总长取自它的
+ * `content-range`、`content-type` / `etag` 等直接抄它的头。
+ *
+ * `prefix`（可选）= 那一发**还没读的响应体**（`{ stream, end }`，`end` 是它覆盖到的字节位置）：
+ * 上限之外的大对象不再把它掐掉，而是**先边下边吐这一发**、同时并发取后面的块 ——
+ * 客户端从第 0 个字节起就有连续数据，不会卡在"等第一块读满"上，上游那一发也不白拉。
+ * ⚠️ 有前缀时**不开首块自适应与头部对冲**：那两样是给"起播第一块"用的，前缀已经在连续吐字节了，
+ *    再留着只是同一份数据多打几发（请求数因此与"掐掉重下"持平，不再多出重复的头部块）。
  */
-async function relayChunked(req, res, { url, headers, label, probe, p }) {
+async function relayChunked(req, res, { url, headers, label, probe, p, prefix }) {
   const head = String(req.method || 'GET').toUpperCase() === 'HEAD';
   const { total } = probe;
   const r = resolveRange(parseRange(req.headers.range), total);
@@ -570,18 +849,20 @@ async function relayChunked(req, res, { url, headers, label, probe, p }) {
   }
   if (r.ranged) out['Content-Range'] = `bytes ${r.start}-${r.end}/${total}`;
   const status = r.ranged ? 206 : 200;
-  console.log(`  ⇄ 中继 ${label || ''} → ${status}（${p.chunkKB}KB × ${p.threads} 路，共 ${total} 字节）`);
+  const expect = r.end - r.start + 1;
+  const headNote = prefix ? `前缀 ${((prefix.end - r.start + 1) / 1048576).toFixed(1)}MB 流式 + ` : '';
+  console.log(`  ⇄ 中继 ${label || ''} → ${status}（${headNote}${p.chunkKB}KB × ${p.threads} 路，共 ${total} 字节）`);
   res.writeHead(status, out);
   if (head) return res.end();
 
   const ctrl = new AbortController();
   res.on('close', () => ctrl.abort());
 
-  /* 切块边界：探测式请求前 N 块小尺寸，其余正常 chunkSize */
-  const isProbe = req.headers.range === 'bytes=0-' || (!req.headers.range && r.start === 0);
+  /* 切块边界：从**前缀之后**接着切；探测式请求前 N 块小尺寸，其余正常 chunkSize */
+  const isProbe = !prefix && (req.headers.range === 'bytes=0-' || (!req.headers.range && r.start === 0));
   const chunkSize = p.chunkKB * 1024;
   const bounds = [];
-  let pos = r.start;
+  let pos = prefix ? prefix.end + 1 : r.start;
   while (pos <= r.end) {
     const size = isProbe && bounds.length < RELAY_HEAD_SMALL_COUNT ? RELAY_HEAD_SMALL_BYTES : chunkSize;
     const end = Math.min(pos + size - 1, r.end);
@@ -601,8 +882,8 @@ async function relayChunked(req, res, { url, headers, label, probe, p }) {
       const i = launched;
       launched += 1;
       const [a, b] = bounds[i];
-      /* 头部块：更短的读满超时 + 2 路对冲；其余块单发 */
-      const isHead = i < RELAY_HEAD_SMALL_COUNT;
+      /* 头部块：更短的读满超时 + 2 路对冲；其余块单发（有前缀时一律单发，见函数头） */
+      const isHead = !prefix && i < RELAY_HEAD_SMALL_COUNT;
       const readTimeout = isHead ? RELAY_HEAD_CHUNK_TIMEOUT_MS : RELAY_CHUNK_TIMEOUT_MS;
       const one = isHead
         ? firstOk(
@@ -618,6 +899,19 @@ async function relayChunked(req, res, { url, headers, label, probe, p }) {
   launch();
   const body = Readable.from((async function* chunks() {
     try {
+      /* 前缀先吐：它正好覆盖 `r.start..prefix.end`，顺序天然对得上；读多快由客户端消费速度决定
+       * （`for await` + `pipeline` 的背压一路传到上游那条连接）。后面的块此时已经在并发取了。 */
+      if (prefix) {
+        const headStream = Readable.fromWeb(prefix.stream);
+        try {
+          for await (const c of headStream) {
+            bytes += c.length;
+            yield c;
+          }
+        } finally {
+          headStream.destroy(); // 客户端中途走掉 → 这一发也别挂在面板上
+        }
+      }
       for (let i = 0; i < count; i += 1) {
         const one = pending.get(i);
         pending.delete(i);
@@ -634,8 +928,14 @@ async function relayChunked(req, res, { url, headers, label, probe, p }) {
       ctrl.abort(); // 收尾 / 客户端断开，窗口里的上游连接一起断
     }
   })());
+  /* ⚠️ 这行是**这一跳**结束（客户端掐掉也算），不等于"播完"：搬的比声明的少就如实写出来 ——
+   * 实测踩过：开始写「共 2930168 字节」、结束只写「搬了 0.5MB」，那种对不上就是被掐在半路。 */
   res.on('close', () => {
-    if (bytes) console.log(`  ⇄ 中继结束 ${label || ''}：搬了 ${(bytes / 1048576).toFixed(1)}MB（${p.chunkKB}KB × ${p.threads} 路）`);
+    if (!bytes) return;
+    const mb = (bytes / 1048576).toFixed(1);
+    console.log(bytes < expect
+      ? `  ⇄ 中继结束 ${label || ''}：搬了 ${mb}MB / 共 ${(expect / 1048576).toFixed(1)}MB（客户端提前断开）`
+      : `  ⇄ 中继结束 ${label || ''}：搬了 ${mb}MB（${p.chunkKB}KB × ${p.threads} 路）`);
   });
   try {
     await pipeline(body, res);
@@ -646,9 +946,9 @@ async function relayChunked(req, res, { url, headers, label, probe, p }) {
 }
 
 /**
- * 单连接原样透传（**兜底**：面上游不认 Range / 探不出总长 / 总开关关掉时走这条）。
+ * 单连接原样透传（**兜底**：上游不认 Range / 探不出总长 / 总开关关掉 / HEAD / 后缀式 Range 走这条）。
  * 三条口径：
- *   · 只搬运：不自攒缓冲、不做分块并发，靠背压限流；
+ *   · 只搬运：不自攒缓冲、不做分块并发，靠背压限流，**响应头一到就边下边发**；
  *   · **Range / 206 / 416 原样透传**：不给 seek 添乱，也不自己算长度；
  *   · 客户端断开就把上游一起断（否则连接挂在面板上直到超时）。
  */
@@ -668,31 +968,10 @@ async function relayPipe(req, res, { url, headers, label }) {
   if (up.status !== 200 && up.status !== 206 && up.status !== 416) {
     return sendError(res, 502, `中继取流失败：上游 HTTP ${up.status}`);
   }
-
-  const out = { 'Cache-Control': 'no-store' };
-  for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
-    const v = up.headers.get(k);
-    if (v) out[k] = v;
-  }
-  console.log(`  ⇄ 中继 ${label || ''} → ${up.status}（${up.headers.get('content-type') || '?'}，带 ${Object.keys(want).filter((k) => k.toLowerCase() !== 'range').length} 个头）`);
-  res.writeHead(up.status, out);
-  if (!up.body) return res.end();
-
-  let bytes = 0;
-  const body = Readable.fromWeb(up.body);
-  body.on('data', (c) => {
-    bytes += c.length;
+  return pipeUpstream(res, up, {
+    label,
+    note: `带 ${Object.keys(want).filter((k) => k.toLowerCase() !== 'range').length} 个头`,
   });
-  /* 客户端先走（换台 / 拖进度）→ 上游一起断，别把连接挂在面板上。
-   * ⚠️ 挂在 **`res`** 上而不是 `req`：`req` 的 `close` 在"请求体读完"时就会发（GET 是空体，
-   * 等于一开始就发），照它断流会把正常播放掐死在半路。`res` 的 `close` 才是"这一跳真的结束了"；
-   * 正常播完时它也在 `end` 之后到，那时 `destroy()` 落在已结束的流上，无副作用。 */
-  res.on('close', () => {
-    body.destroy();
-    if (bytes) console.log(`  ⇄ 中继结束 ${label || ''}：搬了 ${(bytes / 1048576).toFixed(1)}MB`);
-  });
-  body.on('error', () => res.destroy());
-  return body.pipe(res);
 }
 
 /**
@@ -734,9 +1013,11 @@ function forwardLink(url, headers, p) {
 }
 
 /**
- * 字节中继（对外唯一入口，`servePart` / agg 壳 / emby 路由都走它）。两条路：
- *   ① **分块并发**（默认）：探总长 → 有界 Range 切块并发 → 按序吐（`relayChunked`）；
- *   ② **单连接原样透传**（兜底）：总开关关掉、或上游不认 Range / 探不出总长（`relayPipe`）。
+ * 字节中继（对外唯一入口，`servePart` / agg 壳 / emby 路由都走它）。三条路：
+ *   ① **单连接直搬**：一发有界 Range 就把客户端要的整份要回来了 → 原样边下边发（**不切、零重下**）；
+ *      段级对象（HLS 分片，实测 1.1~2.8MB）走的就是这条 —— 切块档**按序等块**，一片卡住整条流就断流（见 ADR-0078）；
+ *   ② **分块并发**：比直搬上限还大的（网盘那种大文件）→ 那一发**当流式前缀先吐**，后面的块并发按序续上；
+ *   ③ **单连接原样透传**（兜底）：总开关关掉、HEAD、后缀式 Range、上游不认 Range / 探不出总长（`relayPipe`）。
  * 走哪条只影响"怎么搬"，不影响 `playVia` 的落法判断（那在 `planStream`）。
  *
  * **外转优先**：设置里 `streamRelay.forwardEnabled` 打开就不自己搬 —— 直接 302 到外部代理
@@ -759,9 +1040,59 @@ async function relayBytes(req, res, opts) {
   }
   try {
     if (!p.enabled) return await relayPipe(req, res, { url, headers, label });
-    const probe = await probeRange(url, headers);
-    if (!probe) return await relayPipe(req, res, { url, headers, label });
-    return await relayChunked(req, res, { url, headers, label, probe, p });
+    const method = String(req.method || 'GET').toUpperCase();
+    const want = parseRange(req.headers.range);
+    /* 这两档都不按直搬上限判：HEAD 一个字节都不搬（单连接最省，还省掉一次问路）；
+     * `bytes=-N` 后缀式**本身就有界**（不是被限速的开放式形态），上游自己算尾段比先探总长再切更省。 */
+    if (method === 'HEAD' || (want && want.suffix !== undefined)) {
+      return await relayPipe(req, res, { url, headers, label });
+    }
+
+    /* ⚠️ 别"先探一发、拿到总长再从头重下"：段级对象（HLS 分片，实测 1.1~2.8MB）为此白付一个 RTT，
+     * 上游还要多挨一次掐连接 —— 实测首字节 300ms 变 1s（见 ADR-0077）。这一发直接按
+     * **段级对象直搬上限**（`RELAY_DIRECT_MAX_BYTES`）的**有界** Range 去要，回来的就可能是数据本身：
+     *   · 整份装得下（HLS 分片正是这一档）→ **单连接、零重下**，响应头一到就边下边发；
+     *   · 比上限还大（网盘那种真·大文件）→ **这一发不扔**：它当流式前缀边吐边下，后面的块同时并发取
+     *     （见 `relayChunked` 的 `prefix`）—— 既不白拉，客户端也不会卡在"等第一块读满"上。
+     * 为什么是有界 Range 而不是开放式 `bytes=0-`：网盘 CDN 按 Range 形态限速（见 `RELAY_DEFAULTS`）。 */
+    const start = want ? want.start : 0;
+    const cap = want && want.end !== Infinity
+      ? Math.min(want.end, start + RELAY_DIRECT_MAX_BYTES - 1)
+      : start + RELAY_DIRECT_MAX_BYTES - 1;
+    const first = await openRange(url, headers, start, cap);
+    /* 取不回来：退回单连接原样透传（那条老路自己会再取一发、如实报错） */
+    if (!first) return await relayPipe(req, res, { url, headers, label });
+    /* 200 = 上游不认 Range、416 = 越界：这一发就是**如实的答案**，原样搬走（与改前退回透传同一结果） */
+    if (first.status === 200 || first.status === 416) return pipeUpstream(res, first, { label });
+
+    const cr = first.status === 206 ? parseContentRange(first.headers.get('content-range')) : null;
+    const wanted = cr ? wantedBytes(want, start, cr.total) : Infinity;
+    /* 整份就装在这一发里（且它确实覆盖了客户端要的那一段）→ 单连接直搬，**不再切块**。
+     * `noRange`：客户端没给出可用的 Range（没带 / 认不出），这一发是面板按有界 Range 自己发的，
+     * 回的是 206，但对客户端得如实收成 200 整份。 */
+    if (cr && cr.start === start && cr.end === start + wanted - 1) {
+      return pipeUpstream(res, first, { label, noRange: !want, note: `单连接直搬，共 ${wanted} 字节` });
+    }
+    /* 比上限还大：这一发（前缀）**留着当流式头**，剩下的块并发取 —— 别掐掉重下 */
+    if (cr && cr.start === start && first.body) {
+      return await relayChunked(req, res, {
+        url,
+        headers,
+        label,
+        p,
+        probe: { total: cr.total, headers: first.headers },
+        prefix: { stream: first.body, end: cr.end },
+      });
+    }
+    /* 形状认不出 / 前缀对不上：**先掐再判**，绝不把这半截读进内存 */
+    if (first.body) {
+      try {
+        await first.body.cancel();
+      } catch {
+        /* 断不干净也不影响结果 */
+      }
+    }
+    return await relayPipe(req, res, { url, headers, label });
   } catch (e) {
     if (res.headersSent) return res.destroy();
     return sendError(res, 502, `中继取流失败：${String((e && e.message) || e)}`);
@@ -858,6 +1189,9 @@ module.exports = {
   relayPlaylist,
   originOf,
   servePart,
+  serveHls,
+  serveImage,
+  signImagePath,
   relayBytes,
   /* 搬运参数（emby 层也要读一遍拉流地址上那对，见 finishStream） */
   urlRelayParams,

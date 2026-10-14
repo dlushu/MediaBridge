@@ -297,4 +297,9 @@ module.exports = function routes(r) {
 
   r.add('GET', '/api/agg/stream', serveAggStream);
   r.add('GET', '/api/agg/stream.m3u8', serveAggStream);
+
+  /* HLS 域名端点：清单改写出来的分片打到这里，面板按 host+路径单连接去取。签名是唯一凭证。 */
+  r.add('GET', '/api/agg/hls/:host/*path', (req, res, { params, query }) => {
+    return stream.serveHls(req, res, { host: params.host, path: params.path, query });
+  });
 };

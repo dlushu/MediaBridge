@@ -52,7 +52,7 @@
 | [0042](0042-auth-line-byte-relay.md) | `proxy` 线路：面板代持鉴权头中继（字节转发） | 已采纳（0006 针对要鉴权头线路的局部例外；Emby 层那一格由 0044 补上） |
 | [0043](0043-line-filter-at-aggregate-output.md) | 线路过滤下沉到聚合层产出处：客户端拿到的就是滤过的那份 | 已采纳（局部取代 0025 的转发口径） |
 | [0044](0044-emby-stream-playvia-relay.md) | Emby 层也接 `proxy` 档：`playVia` 编进版本 Id | 已采纳（延伸 0042） |
-| [0045](0045-relay-chunked-concurrent.md) | 字节中继改分块并发：把开放式 Range 换成有界 Range | 已采纳（改 0042 第 3 条约束的实现） |
+| [0045](0045-relay-chunked-concurrent.md) | 字节中继改分块并发：把开放式 Range 换成有界 Range | 已采纳（改 0042 第 3 条约束的实现；第 1 步"先探一发"由 0077 改为一发决断） |
 | [0046](0046-plugin-multiple-types.md) | 插件多类型：一个包一个 id，types 平级 | 已采纳（已实现；迁移见 0047） |
 | [0047](0047-data-migration-gate.md) | 数据迁移框架：版本门禁 + 冲突处置向导 + 提交点续跑 | 已采纳（已实现；交互口径 2026-10-04 修订：无冲突静默迁移、有冲突才铺向导） |
 | [0048](0048-emby-userid-not-identity.md) | Emby 端点鉴权口径：token 是身份，`UserId` 只是参数 | 已采纳（读取类只验 token；`Users/{UserId}` 保持账号校验、不放开跨账号） |
@@ -83,6 +83,9 @@
 | [0073](0073-subtitle-tracks-in-agg-detail.md) | 字幕轨由聚合层随详情供给，emby 层只读 | 已采纳 |
 | [0074](0074-subtitle-deliveryurl-embedded-token.md) | 字幕 `DeliveryUrl` 埋 access token（与 `DirectStreamUrl` 同口径） | 已采纳 |
 | [0075](0075-stream-suffix-alias.md) | agg 流端点加带后缀的别名 `/api/agg/stream.m3u8` | 已采纳 |
+| [0076](0076-source-bind-by-entry-id.md) | 直绑元数据域条目 Id：搜索精度差的站点按 `entryId` 直连，失败回落按名搜 | 已采纳 |
+| [0077](0077-relay-small-object-single-connection.md) | 小对象单连接直搬：探测与"取第一块"合并成一发 | 已采纳（改 0045 第 1 步；"一块"这条线与大对象"掐掉重下"由 0078 改） |
+| [0078](0078-segment-object-single-connection.md) | 段级对象一律单连接直搬（上限 8MB）；更大的那一发当流式前缀 | 已采纳（改 0077 的直搬线、0045 第 1 步） |
 
 ## 新增一条 ADR
 

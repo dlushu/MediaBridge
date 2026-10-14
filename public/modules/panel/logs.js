@@ -53,6 +53,8 @@ export function renderPanelLogs(v) {
   /* ---------------- 工具条 ---------------- */
   const pauseBtn = el('button', { class: 'btn mini', text: '暂停' });
   const clearBtn = el('button', { class: 'btn mini danger', text: '清空' });
+  const exportBtn = el('button', { class: 'btn mini', text: '导出日志' });
+  const checkBtn = el('button', { class: 'btn mini', text: '系统自检' });
 
   /* 级别过滤：全部（含 info/log）/ 警告以上 / 仅错误。
    * 用分段控件而不是一排按钮 —— 它只换"看哪些"，不产生动作，按钮样式会让人以为点了会执行什么。 */
@@ -140,6 +142,31 @@ export function renderPanelLogs(v) {
     }
   });
 
+  /* 导出日志：下载带系统环境信息的完整日志文件 */
+  exportBtn.addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = '/api/logs/export';
+    a.download = ''; // 让浏览器用 Content-Disposition 里的文件名
+    document.body.append(a);
+    a.click();
+    a.remove();
+    toast('日志导出中…');
+  });
+
+  /* 系统自检：检查关键路径与配置状态 */
+  checkBtn.addEventListener('click', async () => {
+    try {
+      const r = await api('/api/panel/selfcheck');
+      const lines = [`系统自检 ${r.ok ? '✔ 通过' : '✘ 有问题'}\n`];
+      for (const c of r.checks) {
+        lines.push(`${c.ok ? '✔' : '✘'} ${c.name}: ${c.detail}`);
+      }
+      alert(lines.join('\n'));
+    } catch (e) {
+      toast('自检失败: ' + e.message, true);
+    }
+  });
+
   /* ---------------- 组装 ---------------- */
   v.append(
     el(
@@ -151,6 +178,9 @@ export function renderPanelLogs(v) {
         { class: 'toolbar' },
         pauseBtn,
         clearBtn,
+        el('span', { class: 'sep' }),
+        exportBtn,
+        checkBtn,
         el('span', { class: 'sep' }),
         levelSeg,
         el('span', { class: 'spacer' }),

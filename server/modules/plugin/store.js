@@ -218,6 +218,8 @@ function installDir(srcDir, { origin = 'manual', md5 = '', enabled } = {}) {
     version: m.version,
     description: m.description,
     domain: m.domain,
+    /* 源插件声明的直绑域（契约 binds；没有就是空数组）—— 聚合层按它决定"先按 entryId 直调 detail" */
+    binds: Array.isArray(m.binds) ? m.binds.slice() : [],
     series: m.series,
     hasWebui: Object.keys(m.webui || {}).length > 0,
     /* webui 归一化成 {类型:入口}（见 contract.readManifest）；网关/路由按角色取 */
