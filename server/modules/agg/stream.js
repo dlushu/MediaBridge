@@ -342,7 +342,12 @@ async function serveHls(req, res, { host, path }) {
   const url = `https://${cleanHost}/${cleanPath}${q ? '?' + q : ''}`;
   const method = String(req.method || 'GET').toUpperCase();
   const want = Object.assign({}, headers);
-  if (req.headers.range) want.Range = req.headers.range;
+  /* 清单**不转发**客户端 Range。播放器（实测 CapyPlayer / Lavf）对子清单发 `bytes=0-`，
+   * 上游就回 206；旧逻辑只在状态正好是 200 时改写，相对分片地址原样出去，
+   * 播放器把 206 当成媒体字节、不当清单，第一个 TS 包是 0，后面不再请求分片。
+   * 分片（非 `.m3u8`）仍原样转发 Range，seek 不受影响。 */
+  const playlist = method !== 'HEAD' && isPlaylistUrl(url);
+  if (!playlist && req.headers.range) want.Range = req.headers.range;
   let up;
   try {
     up = await fetch(url, { method: method === 'HEAD' ? 'HEAD' : 'GET', headers: want, redirect: 'follow' });
@@ -350,11 +355,14 @@ async function serveHls(req, res, { host, path }) {
     return sendError(res, 502, `中继取流失败：${String((e && e.message) || e)}`);
   }
   const ctype = String(up.headers.get('content-type') || '');
-  if (up.status === 200 && /mpegurl|m3u8/i.test(ctype)) {
+  /* 200 / 206 都整份读入再改写，回给客户端的一律是 200（不带 Content-Range）。
+   * 判据是正文以 `#EXTM3U` 开头，不单看 Content-Type：路径已经是清单。 */
+  if (playlist && (up.status === 200 || up.status === 206)) {
     const text = await up.text();
     if (/^\s*#EXTM3U/.test(text)) {
       const hlsBase = String(req.url || '').includes('/api/emby/') ? '/api/emby/hls' : '/api/agg/hls';
       const fixed = rewriteUris(text, up.url || url, (abs) => hlsLink(originOf(req), abs, headers, hlsBase));
+      console.log(`  ⇄ 清单改写 hls/${cleanHost} → 200（${fixed.count} 个地址，上游 ${up.status}）`);
       return sendBuffer(res, 200, Buffer.from(fixed.text, 'utf8'), PLAYLIST_MIME);
     }
   }
