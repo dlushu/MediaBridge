@@ -445,6 +445,17 @@ module.exports = function routes(r) {
       return sendResult(res, denied);
     }
 
+    /* 首页行（mbphome_*）不是「条目」，但客户端（如 RodelPlayer）会把它当媒体库点开并请求详情 ——
+     * 这里回「库里那一行」本身的 DTO（与 Views 里同一份形状），客户端随后用 ParentId 列内容。 */
+    if (String(params.itemId || '').startsWith('mbphome_')) {
+      const views = service.getViews();
+      const hit = ((views && views.body && views.body.Items) || []).find((x) => x.Id === params.itemId);
+      if (hit) {
+        log.logResult(req, `首页库详情 Users/…/Items/${params.itemId}`, { status: 200 }, q);
+        return sendJson(res, 200, hit);
+      }
+    }
+
     if (!metaBridge.parseItemId(params.itemId)) return notImplemented(req, res, { pathname, query });
 
     /* `MediaSources[].Path` 给**相对路径**（`/Items/…/Stream/…`，见 `service.streamPath`）—— 客户端把它
