@@ -433,7 +433,8 @@ module.exports = function routes(r) {
     return sendJson(res, out.status, out.body);
   });
 
-  /* 单条详情：只认本面板发出去的条目 Id（前缀归元数据域）；认不出的（如 Items/Resume）走 501 */
+  /* 单条详情：认本面板发出去的条目 Id（前缀归元数据域）与首页库 Id（`mbphome_…`，见 service.getViewItem）；
+   * 认不出的（如 Items/Resume）走 501 */
   r.add('GET', '/api/emby/Users/:userId/Items/:itemId', async (req, res, { params, query, pathname }) => {
     const q = log.queryBrief(query);
     /* AccessToken 守卫（见 service.authorize）：无效/缺失一律 401。
@@ -445,15 +446,13 @@ module.exports = function routes(r) {
       return sendResult(res, denied);
     }
 
-    /* 首页行（mbphome_*）不是「条目」，但客户端（如 RodelPlayer）会把它当媒体库点开并请求详情 ——
-     * 这里回「库里那一行」本身的 DTO（与 Views 里同一份形状），客户端随后用 ParentId 列内容。 */
-    if (String(params.itemId || '').startsWith('mbphome_')) {
-      const views = service.getViews();
-      const hit = ((views && views.body && views.body.Items) || []).find((x) => x.Id === params.itemId);
-      if (hit) {
-        log.logResult(req, `首页库详情 Users/…/Items/${params.itemId}`, { status: 200 }, q);
-        return sendJson(res, 200, hit);
-      }
+    /* 首页那行库（`mbphome_…`）不是「条目」，但客户端（实测 RodelPlayer）会把它当条目点开、
+     * 先要它的详情：回 `Views` 里**同一份**库条目 DTO，客户端随后用 `ParentId` 列内容。
+     * 判据（前缀只在 home 定义一次）与「查不到 → 404」都在 `service.getViewItem()` 里。 */
+    const view = service.getViewItem(params.itemId);
+    if (view) {
+      log.logResult(req, `首页库详情 Users/…/Items/${params.itemId}`, view, q);
+      return sendResult(res, view);
     }
 
     if (!metaBridge.parseItemId(params.itemId)) return notImplemented(req, res, { pathname, query });

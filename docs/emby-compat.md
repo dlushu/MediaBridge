@@ -222,7 +222,7 @@ docker logs -t media-bridge-panel              # 带时间戳
 | DELETE | `/api/emby/Users/{UserId}/PlayedItems/{ItemId}` | 同上 | 200 **`UserItemDataDto`**（`Played:false`、`PlayCount:0`、位置归零，真机实测同此 —— 它还会去掉 `LastPlayedDate`）—— 行**留着**（重看时不必重新攒；时长与季集坐标随行保留） | 客户端写（同客户端：标记未看） |
 | POST | `/api/emby/Users/{UserId}/FavoriteItems/{ItemId}` | 路径参数 `ItemId`（**本面板发出去的 Id**，放宽到 `movie`/`show`/`season`/`episode`） | 200 **`UserItemDataDto`**（`IsFavorite:true`，真机实测同此）；**收藏时反查元数据、快照落 `favorite` 表**（见 [ADR-0058](adr/0058-favorite-items.md)）；**无 token → 401**；Id 认不出 / 反查失败 → 204 且**不写库** | 客户端写（实测 Rex/1.0.0 收藏）；**真机对照见「十」#21：四类条目均 200、写端点 200 + `UserItemDataDto`** |
 | DELETE | `/api/emby/Users/{UserId}/FavoriteItems/{ItemId}` | 同上 | 200 **`UserItemDataDto`**（`IsFavorite:false`，真机实测同此）；**取消收藏 = 删 `favorite` 行**（不反查）；**无 token → 401**；Id 认不出 → 204 且不写库 | 客户端写（同客户端：取消收藏） |
-| GET | `/api/emby/Users/{UserId}/Items/{ItemId}` | 路径参数 `ItemId`（面板发出去的条目 Id：`{域}_{编号}_{tv\|movie}[_s{n}][_e{m}]`）；`EnableImageTypes`/`Fields`（忽略） | 200 **单个 `BaseItemDto` 本体**（不包 `QueryResult`）：上游元数据 + `ProviderIds.MediaBridge="<站点key>\|<vod_id>"` + `MediaBridgeSource{Lines, Target}` + **集才有 `MediaSources`（线路=版本，`Id` = `mbp:` + base64url(deflateRaw(JSON `{r: ref}`))，`Path` 留到 PlaybackInfo 现取）**；**聚合取数失败只降级不回失败**（元数据照常 200）；Id 认不出 → **501**（如 `Items/ResumeXyz`）；上游失败 → 照实回失败码；**AccessToken 校验**（无 token → 401 纯文本）；**只验 token、不比对 UserId**（10-1 起对齐真机 —— 真机对「不存在的 ItemId」「非 Guid 的 UserId」回 500 误码，本面板**不复刻**，照常按 Id 是否认得出给 501 / 200）；未设账号 → 401 | 部署者指定（**元数据走上游 + 线路/绑定走设置里的聚合地址**）；**真机对照见「十」#10：详情只验 token、适用自动对齐例外** |
+| GET | `/api/emby/Users/{UserId}/Items/{ItemId}` | 路径参数 `ItemId`（面板发出去的条目 Id：`{域}_{编号}_{tv\|movie}[_s{n}][_e{m}]`，**或首页库 Id `mbphome_*`**）；`EnableImageTypes`/`Fields`（忽略） | 200 **单个 `BaseItemDto` 本体**（不包 `QueryResult`）：上游元数据 + `ProviderIds.MediaBridge="<站点key>\|<vod_id>"` + `MediaBridgeSource{Lines, Target}` + **集才有 `MediaSources`（线路=版本，`Id` = `mbp:` + base64url(deflateRaw(JSON `{r: ref}`))，`Path` 留到 PlaybackInfo 现取）**；**聚合取数失败只降级不回失败**（元数据照常 200）；**首页库行（`mbphome_*`）→ 200 单个库条目本身**（与 `Views` 里同一份 `CollectionFolder`；客户端实测 RodelPlayer 点开首页那行会先要它的详情），**前缀认得出但这行已不在启用清单 → 404**；Id 前缀认不出 → **501**（如 `Items/ResumeXyz`）；上游失败 → 照实回失败码；**AccessToken 校验**（无 token → 401 纯文本）；**只验 token、不比对 UserId**（10-1 起对齐真机 —— 真机对「不存在的 ItemId」「非 Guid 的 UserId」回 500 误码，本面板**不复刻**，照常按 Id 是否认得出给 501 / 200）；未设账号 → 401 | 部署者指定（**元数据走上游 + 线路/绑定走设置里的聚合地址**）；**真机对照见「十」#10：详情只验 token、适用自动对齐例外；库 Id（`mbphome_*`）的详情见 10-5（未复测）** |
 | GET | `/api/emby/Studios` | 无路径参数；query `UserId`/`Limit`/`StartIndex`/`SearchTerm`/`Fields`（**全忽略**） | 200 **空** `QueryResult`：`{Items:[], TotalRecordCount:0}`（**如实**：服务端没有片库可枚举，详见「五」下面那条）；**只验 token**（14-1 起对齐真机：无 token / 无效 token → **401 纯文本**；回空也照样校验） | 部署者指定（**回空，不是 501**）；**真机对照见「十」#14：回空不复刻真机全量清单、鉴权对齐「只验 token」** |
 | GET | `/api/emby/Shows/NextUp` | `UserId`（在 **query**）、`SeriesId`（可选 —— SenPlayer 实测会带，只问某一部剧）、`Limit`（截断用）；`MediaTypes`/`Recursive`/`Fields`/`EnableImageTypes`（忽略） | 200 `QueryResult<BaseItemDto>`：**恒为空**（`{Items:[], TotalRecordCount:0}`）—— **端点保留、对外恒空**，只为藏掉首页那行「接下来看」（它与「继续观看」重复），算「该看哪一集」的实现留着但**暂不调用**，见 [ADR-0060](adr/0060-nextup-hidden.md)；**只验 token、不比对 UserId**（无 token → 401 纯文本；有效 token + 错配 / 不存在的 UserId 照旧 200） | 部署者指定（SenPlayer 实测在要）；**真机对照见「十」#15：只验 token、适用自动对齐例外**；"出真数据"的旧口径见 [ADR-0023](adr/0023-playback-progress.md)（该格已被 0060 取代） |
 | GET | `/api/emby/Items/Counts` | 全部忽略（含 `ParentId`） | 200 **`ItemCounts` 全 0**（14 个字段：`MovieCount`/`SeriesCount`/`EpisodeCount`/`GameCount`/`ArtistCount`/`ProgramCount`/`GameSystemCount`/`TrailerCount`/`SongCount`/`AlbumCount`/`MusicVideoCount`/`BoxSetCount`/`BookCount`/`ItemCount`）；**只验 token、不比对 UserId**（16-1 起对齐真机：无 token / 无效 token → 401 纯文本；有效 token + 任意 UserId → 200）。**全 0 = "数不出来"，不是"库是空的"** —— 详见「五」下面那条 | 部署者指定（SenPlayer 实测在要）；**真机对照见「十」#16：回全 0 不复刻真机真实计数、鉴权对齐「只验 token」** |
@@ -249,7 +249,7 @@ docker logs -t media-bridge-panel              # 带时间戳
 - **取用户资料的分支**：按 `Id` 反解账号（**不存 user_id 列，运行时现算**：serverId 一变库里那列就全废，现算永远自洽）—— 解析不出时，账号表为空 401、否则 404（不是 403）。
 - **媒体库（`Users/{UserId}/Views`）—— 不再是留白**：把**每个「启用」的首页插件行**做成一个 Emby 媒体库（`Type: CollectionFolder`），客户端据此在首页列出这些库。数据取自插件 `registry` 的**快照**（不加载插件代码、不起沙箱 —— Views 是高频端点）。
   - **Id = `mbphome_` + base64url(`<插件id>|<行id>`）**：插件 id 与行 id 都允许 `.`/`_`/`-`，用分隔符硬拼没法可靠反解，所以**整体编码**；base64url 字符集只有 `[A-Za-z0-9_-]`，URL 安全（不会像 `#` 那样被客户端当锚点吃掉 —— 同 `mbpSourceId` 那次的问题）。派生与解析是一对（`home.viewId` / `home.parseViewId`），**代码里挨着放**。
-  - **与 `{域}_*` 不冲突**：`metaBridge.parseItemId()` 认不出 `mbphome_*`，所以这类 Id 只属于 Views。
+  - **与 `{域}_*` 不冲突**：`metaBridge.parseItemId()` 认不出 `mbphome_*`；认它的只有两条路 —— `Views`（把它列成库）与**库条目的详情**（客户端点开首页那行时先要它，见「五」的条目详情那格）。前缀只在 `home` 定义一次，路由层与 service 都经 `home.parseViewId` 判，不复制字符串。
   - **库条目的字段（按真机逐字段补齐）**：真机 25 个库的响应逐项对过，现在两边字段**一一对应**。取值来源如下，**推不出来的一律不填**：
 
     | 字段 | 本面板给什么 | 依据 |
@@ -470,6 +470,12 @@ docker logs -t media-bridge-panel              # 带时间戳
 >   - **改的是什么**：版本里字幕流的 `Codec` 申报的是 Emby 内部名（`srt→subrip`、`vtt→webvtt`，见 23-2），客户端据此拼 URL 时会用 `Stream.subrip` / `Stream.webvtt`；此前端点正则只收 `srt` / `vtt`，这两种一律落 `未实现` → **501**（实测 **SenPlayer**：SRT 轨请求 `…/Subtitles/{Index}/Stream.subrip` 连吃 501，同批 ASS 轨走 `Stream.ass` 正常 200）。现按客户端实际发来的形状放宽正则，并把 `subrip` / `webvtt` 归一到契约认的 `srt` / `vtt`（`Content-Type` 兜底映射同步命中）。
 >   - **影响端点**：仅 `GET /api/emby/Videos|videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}`。响应形状、鉴权口径（只验 token、不比对 UserId）、`MediaSourceId` 载荷均不变。
 >   - **影响方向**：此前吃 501 的 SRT / VTT 字幕轨恢复可取；ASS / SSA 轨行为不变。**客户端无需改动。** 逐条见「十」#23 的 23-6（**已落码，未复测**）。
+>
+> - **`GET /Users/{UserId}/Items/{ItemId}` 新增认领首页库 Id（`mbphome_*`）：200 + 库条目，查不到回 404**
+>   - **改的是什么**：此前 `mbphome_*` 会被 `metaBridge.parseItemId()` 判成「Id 认不出」→ **501**。实测新客户端（RodelPlayer）把首页那行库当**媒体库**点开，会先请求 `GET /Users/{UserId}/Items/mbphome_…` 取它的**详情** —— 吃 501 后点下去没有后续。现该端点认这个前缀：回 `Views` 里**同一份**库条目 DTO（`Type: CollectionFolder`、`IsFolder: true`、封面在 `ImageTags.Primary`），客户端随后按 `ParentId=<库Id>` 列内容（`Items?ParentId=`，本就实现，见 [ADR-0055](adr/0055-bare-items-query-returns-views.md)）。
+>   - **影响端点**：`GET /api/emby/Users/{UserId}/Items/{ItemId}`。
+>   - **影响方向**：`mbphome_*` 从 501 → 200（**新增**，`{域}_*` 条目 Id 的 200/404/501 不变）；**前缀认得出但该行已不在启用清单 → 404**（「面板发过、现在没了」，与其它条目的 404 同口径），**不落 501**（501 让客户端当「端点没实现」去重试 / 上报，而这里是确定没有）。条目 Id 前缀（`metaBridge.parseItemId` 判据）**没有改动**。逐条见「十」#10 的 10-5（**未复测**，真机没有「库行 Id」这个概念，无样本可对）。
+>   - **未涉及**：`Views` / `Latest` / `Resume` / `PlaybackInfo` / `Items?ParentId=` 的参数与响应；图片路由（`Items/{Id}/Images…` 本来就按「认不出的 itemId 走 `IsImageEnabled`」，`mbphome_*` 一直在里面）。
 > - **上游失败一律照实回失败**：**不编占位数据、不回空的假成功**。状态码 = 上游的真实原因，由 `metaBridge.httpStatusOf()` 一处决定：
 
 | 失败原因 | 回的码 |
@@ -1249,7 +1255,7 @@ itsmygo 是 **openresty + Go 的仿 Emby 服务**（响应头 `X-Itsmygo-Backend
 | 7 | `GET /api/emby/Shows/{Id}/Seasons`（剧的季列表） | 已落码（未复测） | [#7](emby-realdevice/07-shows-seasons.md) |
 | 8 | `GET /api/emby/Shows/{Id}/Episodes`（剧 / 季的分集列表） | 已落码（未复测）；无开放差异 | [#8](emby-realdevice/08-shows-episodes.md) |
 | 9 | `GET /api/emby/Users/{UserId}`（取用户资料 / `UserDto` 本体） | 维持现状（未改代码） | [#9](emby-realdevice/09-users-userid-dto.md) |
-| 10 | `GET /api/emby/Users/{UserId}/Items/{ItemId}`（条目详情 / `BaseItemDto` 本体） | 已落码（未复测） | [#10](emby-realdevice/10-items-itemid-detail.md) |
+| 10 | `GET /api/emby/Users/{UserId}/Items/{ItemId}`（条目详情 / `BaseItemDto` 本体） | 已落码（未复测）；库 Id（`mbphome_*`）回库条目、查不到 404（10-5，未复测） | [#10](emby-realdevice/10-items-itemid-detail.md) |
 | 11 | `POST /api/emby/Items/{ItemId}/PlaybackInfo`（播放信息 / `PlaybackInfoResult`） | 已落码（未复测） | [#11](emby-realdevice/11-items-playbackinfo.md) |
 | 12 | 直连拉流（`GET /api/emby/videos/{ItemId}/{file}` · `Items/{ItemId}/Stream/{token}` · `Items/{ItemId}/Download`） | 已落码（未复测）；实例端口已加根路径兜底（[ADR-0065](adr/0065-instance-port-root-path-fallback.md)），**未复测** | [#12](emby-realdevice/12-direct-stream.md) |
 | 13 | `GET /api/emby/Users/{UserId}/Items/Resume`（继续观看） | 已落码（未复测） | [#13](emby-realdevice/13-users-userid-items-resume.md) |

@@ -141,7 +141,8 @@ async function warmHome() {
  *   - **稳定**：插件行不变则 Id 不变 —— 客户端拿它当主键缓存，飘了「已看」就丢；
  *   - **必须整体编码**：插件 id 与行 id 都允许 `.`/`_`/`-`，用分隔符硬拼根本没法可靠反解；
  *     而 base64url 的字符集只有 `[A-Za-z0-9_-]`，URL 安全（不会像 `#` 那样被客户端当锚点吃掉）；
- *   - 与条目 Id 前缀天然不冲突：`parseItemId` 认不出它，所以它只属于 Views。
+ *   - 与条目 Id 前缀天然不冲突：`metaBridge.parseItemId` 认不出它 —— 认它的只有 `Views`，
+ *     以及**库条目的详情**（`service.getViewItem`：客户端点开首页那行时会先要它）。
  */
 const VIEW_PREFIX = 'mbphome_';
 const PLUGIN_ID_RE = /^[a-z][a-z0-9._-]{1,63}$/i;

@@ -1243,6 +1243,35 @@ function getViews() {
 }
 
 /**
+ * `mbphome_…` 的详情 —— 客户端（实测 RodelPlayer）点开首页那行库时会**先要它的详情**，
+ * 此前 `metaBridge.parseItemId()` 认不出这个前缀 → 501，点下去没有后续。
+ *
+ * 回的就是 `getViews` 里**同一份** `homeViewItem` DTO（不另造形状）：`Type: CollectionFolder`、
+ * `IsFolder: true`、封面在 `ImageTags.Primary`；客户端随后按 `ParentId=<库Id>` 列内容
+ * （`home.listByQuery`，本就实现）。
+ *
+ * **判据用 `home.parseViewId`**：前缀只在 `home` 定义一次，这里不另写一份 `mbphome_`
+ * （历史上前缀从 `catpawhome_` 改过一次，复制出来的那处会静默失配）。
+ *
+ * 返回值与其它 service 函数同形状；**`null` = 不是库 Id**（路由层交回原路径继续判）：
+ *   - 认得出、那行仍启用 → `200` + 库条目
+ *   - 认得出、但这行已不在启用清单 → **404**（「面板发过、现在没了」，与 `getItem` 的 404 同口径）——
+ *     **不落 501**：501 是「这个端点没实现」，客户端会当实现缺失去重试 / 上报，而这里是确定没有。
+ */
+function getViewItem(itemId) {
+  if (!home.parseViewId(itemId)) return null;
+  const hit = getViews().body.Items.find((x) => x.Id === itemId);
+  if (!hit) {
+    return {
+      status: 404,
+      body: { error: '没有这个库（那一行已不在启用的首页插件行里）' },
+      log: `首页库详情 ${itemId} → 404（前缀认得出，但该行已不在启用清单）`,
+    };
+  }
+  return { status: 200, body: hit, log: `首页库详情 ${itemId} → 200（${hit.Name}）` };
+}
+
+/**
  * 首页插件行 → Emby 的媒体库条目（`CollectionFolder`）。
  *
  * 刻意**不复用 `baseItem()`**：那是"媒体条目"的形状（`MediaType: Video`、`ProductionYear: 0`、
@@ -4016,6 +4045,7 @@ module.exports = {
   getUser,
   userImage,
   getViews,
+  getViewItem,
   getResume,
   recordPlayback,
   setHiddenFromResume,

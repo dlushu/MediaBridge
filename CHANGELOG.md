@@ -3,6 +3,17 @@
 本文件记录值得用户注意的变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 修复
+
+- **Emby 首页的库，客户端点开不再「没反应」（吃 501）**：客户端（实测 RodelPlayer）把首页那行库当
+  媒体库点开时，会**先请求它的详情** `GET /Users/{UserId}/Items/mbphome_…`；此前该前缀认不出、
+  端点回 **501**，点下去没有后续。现该端点回「库」条目本身（与「媒体库」列表里同一份），
+  客户端随后按 `ParentId` 列内容；前缀认得出但该行已停用 → **404**（不再回 501）。
+  契约见 [emby-compat](docs/emby-compat.md)「五」的条目详情与「契约变更记录」，决策见
+  [ADR-0080](docs/adr/0080-home-view-row-detail.md)。
+
 ## [1.9.7] - 2026-10-15
 
 ### 修复
