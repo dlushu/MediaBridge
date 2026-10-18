@@ -266,6 +266,9 @@ function openEditor(inst) {
   /* 下载开关：默认开（字段缺席 = 开）。关掉后握手 policy、条目 `CanDownload` 与下载端点一起拒绝 */
   const dl = el('input', { type: 'checkbox' });
   dl.checked = isNew ? true : inst.allowDownload !== false;
+  /* 隐藏未播集：默认开（字段缺席 = 开）。关掉 = 列出元数据里的全部集（抢先版/泄露版可看） */
+  const ua = el('input', { type: 'checkbox' });
+  ua.checked = isNew ? true : inst.hideUnairedEpisodes !== false;
   const tip = el('div', { class: 'note' });
 
   modal({
@@ -276,6 +279,7 @@ function openEditor(inst) {
       el('div', { class: 'field' }, el('label', { text: '首页' }), sel),
       el('div', { class: 'field' }, el('label', { text: '搜索域' }), picker.row),
       el('div', { class: 'field' }, el('label', { text: '下载' }), el('label', { class: 'chk', title: '允许客户端下载条目；关闭后握手与下载端点一起拒绝' }, dl, '允许下载')),
+      el('div', { class: 'field' }, el('label', { text: '未播集' }), el('label', { class: 'chk', title: '分集列表不列未播出的集（未来首播日期 / 末尾无日期占位，与真机一致）；关掉列出全部（抢先版可看）' }, ua, '隐藏未播集')),
       tip,
     ],
     actions: [
@@ -288,6 +292,7 @@ function openEditor(inst) {
             name: name.value.trim(),
             homePlugin: sel.value,
             allowDownload: dl.checked,
+            hideUnairedEpisodes: ua.checked,
           };
           /* 搜索域：有可选项时才写（一个域都没装时保持"缺席=全部"）；全不勾 = `[]`（一个都不搜） */
           if (picker.hasItems) body.metaDomains = picker.checked();

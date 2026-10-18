@@ -201,6 +201,8 @@ function publicInstance(x) {
     enabled: !!x.enabled,
     /* 下载开关：字段缺席 = 开（老实例升级后保持「能下载」） */
     allowDownload: x.allowDownload === undefined ? true : !!x.allowDownload,
+    /* 「隐藏未播集」：字段缺席 = 开（老实例升级后默认获得该行为，与真机一致） */
+    hideUnairedEpisodes: x.hideUnairedEpisodes === undefined ? true : !!x.hideUnairedEpisodes,
     homePlugin: x.homePlugin || '',
     /* 搜索通过的域：回副本不回引用；**null = 全部**（字段缺席，老实例与未限定时的口径） */
     metaDomains: Array.isArray(x.metaDomains) ? x.metaDomains.slice() : null,
@@ -255,6 +257,10 @@ function validate(o, self) {
   if (o.homePlugin !== undefined) {
     const h = normName(o.homePlugin);
     if (h && !PLUGIN_ID_RE.test(h)) return '首页插件 id 不合法';
+  }
+  /* 「隐藏未播集」：布尔校验（缺席不校验，add/patch 各自的缺席口径是开） */
+  if (o.hideUnairedEpisodes !== undefined && typeof o.hideUnairedEpisodes !== 'boolean') {
+    return '「隐藏未播集」必须是布尔值';
   }
   /* 「搜索通过的域」：必须是数组，逐项是合法前缀。**空数组合法**（= 一个域都不搜；
    * 字段缺席 = 全部域，所以这里只在显式传了的时候校验）。 */
@@ -323,6 +329,8 @@ async function add(o = {}) {
     enabled: o.enabled === undefined ? true : !!o.enabled,
     /* 下载开关：默认开（缺席按开） */
     allowDownload: o.allowDownload === undefined ? true : !!o.allowDownload,
+    /* 「隐藏未播集」：字段落盘，缺席 = 开（publicInstance 的缺省口径） */
+    hideUnairedEpisodes: o.hideUnairedEpisodes === undefined ? true : !!o.hideUnairedEpisodes,
     homePlugin: normName(o.homePlugin),
     serverId: crypto.randomBytes(8).toString('hex'),
     imageKey: crypto.randomBytes(32).toString('hex'),
@@ -348,6 +356,7 @@ function patch(iid, o = {}) {
   if (o.port !== undefined) inst.port = Number(o.port);
   if (o.enabled !== undefined) inst.enabled = !!o.enabled;
   if (o.allowDownload !== undefined) inst.allowDownload = !!o.allowDownload;
+  if (o.hideUnairedEpisodes !== undefined) inst.hideUnairedEpisodes = !!o.hideUnairedEpisodes;
   if (o.homePlugin !== undefined) inst.homePlugin = normName(o.homePlugin);
   if (o.metaDomains !== undefined) inst.metaDomains = normDomains(o.metaDomains);
   save();
