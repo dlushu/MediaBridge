@@ -9,8 +9,9 @@ node_modules/
 *.log
 emby.log.bak
 
-# 本地工具/会话目录（编辑器、agent 临时脚本）
+# 本地工具/会话目录（编辑器、agent 临时脚本、CodeGraph 索引）
 .codebuddy/
+.codegraph/
 
 # 本地计划与设计文档（只在本机保留，不进版本库）
 .trae/
