@@ -63,6 +63,16 @@ function allowDownload() {
 }
 
 /**
+ * 当前实例要不要「隐藏未播出的集」—— 实例级开关（实例页勾选，见 instance.js），**默认开**。
+ * 与真机 Emby 对齐：真机只列磁盘上存在的文件，元数据里的未播出集天然不出现；
+ * 关掉即回「元数据给什么列什么」（抢先版 / 泄露版还能看）。
+ */
+function hideUnairedEpisodes() {
+  const inst = instance.current();
+  return !inst || inst.hideUnairedEpisodes === undefined ? true : !!inst.hideUnairedEpisodes;
+}
+
+/**
  * 用户 Id：由「服务器 Id + 用户名」派生，稳定且无需额外存储（多账号各自不同）。
  * 归一化走 db.normName —— 登录、查重、UserId 必须同一套规则，否则会出现
  * 「登录成功但 /Users/{id} 404」（用户名带大小写/全角时最明显）。
@@ -2394,6 +2404,25 @@ async function getEpisodes(showId, seasonId) {
 
   const items = (look.item.episodes || [])
     .filter((e) => Number.isFinite(e.episodeNumber))
+    /* 未播出的集不列 —— 实例级开关（实例页「隐藏未播集」，缺省开，`hideUnairedEpisodes()`）：
+     *   ① premiereDate 晚于现在 → 丢掉（客户端点开是空壳；示例见 issue #6「仙逆」）
+     *   ② 没有日期、且排在最后一个有日期的集之后 → 丢（占位集；整季都有日期、独最后一集没有
+     *      的那类，见 issue #6「毛雪汪」。只在**末尾**判，中段无日期的占位若后面还有日期集就保留）
+     * 整季都没有日期时两条规则都无从判断，就原样列出（此时没有定位点，无法和「未播出」区分）。
+     * 关掉开关 = 与「元数据给什么列什么」的旧行为一致（抢先版 / 泄露版还能看）。 */
+    .filter(
+      (e, _i, arr) =>
+        !hideUnairedEpisodes()
+          ? true
+          : (() => {
+              const t = Date.parse(e.premiereDate || '');
+              if (Number.isFinite(t)) return t <= Date.now();
+              const dated = arr.filter((x) => Number.isFinite(Date.parse(x.premiereDate || '')));
+              if (!dated.length) return true;
+              const lastDated = Math.max(...dated.map((x) => x.episodeNumber));
+              return e.episodeNumber <= lastDated;
+            })()
+    )
     .map((e) => {
       const item = baseItem({
         id: metaBridge.itemId(show.domain, 'tv', show.entryId, n, e.episodeNumber),
