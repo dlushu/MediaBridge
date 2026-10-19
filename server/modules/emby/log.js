@@ -77,6 +77,13 @@ function queryBrief(query) {
       parts.push(`${k}=***`);
       continue;
     }
+    /* `Fields` 不参与掩码：它决定客户端要不要版本数组，排查时需要真值。
+     * 该参数不含凭据，截 240 字符后原样输出。 */
+    if (/^fields$/i.test(k)) {
+      const fv = String(v);
+      parts.push(`${k}=${fv.length > 240 ? fv.slice(0, 240) + '…' : fv}`);
+      continue;
+    }
     if (QUERY_NOISE.test(k)) {
       parts.push(`${k}=…`);
       continue;

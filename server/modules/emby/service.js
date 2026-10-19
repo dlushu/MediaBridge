@@ -818,7 +818,14 @@ function recordPlayback(req, kind, body) {
  */
 function playableOf(rawItemId) {
   const p = metaBridge.parseItemId(String(rawItemId || '').trim());
-  if (!p || !isPlayableId(p)) return null;
+  /* isPlayableId 放行了剧/季（版本/播放链路要走），但**进度与写库仍只认集与电影**：
+   * 容器 Id 不当进度条目的主键（沿用放宽前的原判断，避免容器行污染继续观看）。 */
+  const strict =
+    p &&
+    (p.type === 'movie'
+      ? p.season === null && p.episode === null
+      : p.season !== null && p.episode !== null);
+  if (!strict) return null;
   return {
     itemId: metaBridge.itemId(p.domain, p.type, p.entryId, p.season, p.episode),
     seriesId: p.season !== null ? metaBridge.itemId(p.domain, 'tv', p.entryId) : null,
@@ -1193,19 +1200,50 @@ async function progressItem(r, accountId) {
 }
 
 /** 一组进度行 → `QueryResult<BaseItemDto>`（取不到元数据的行**跳过并计数**，日志里说明） */
+/**
+ * 把「继续观看」的进度行按 SeriesId 归组，每组只留第一条。
+ *
+ * - 入参 `rows` 来自 `db.listResume`，**已按最近播放倒序** —— 所以「首次遇到」即「最近看的」。
+ * - 剧用 `tv:<域名>:<条目号>` 做键（**不含季集**，与面板的 SeriesId 口径一致）；
+ *   电影没有季集，用 `id:<条目>` 做键，天然互不合并。
+ * - `parseItemId` 认不出的行不丢：退回用行自己的 `item_id` 当键。
+ *
+ * 返回 `{ kept, merged }`：`merged` 是被合并掉的条数，只用于日志。
+ */
+function dedupResumeBySeries(rows) {
+  const seen = new Set();
+  const kept = [];
+  let merged = 0;
+  for (const r of rows) {
+    const p = metaBridge.parseItemId(String(r.item_id || ''));
+    const key = p && p.season !== null ? `tv:${p.domain}:${p.entryId}` : `id:${r.item_id}`;
+    if (seen.has(key)) {
+      merged += 1;
+      continue;
+    }
+    seen.add(key);
+    kept.push(r);
+  }
+  return { kept, merged };
+}
+
 async function progressList(rows, accountId, label) {
   const items = [];
   let skipped = 0;
+  const skippedIds = []; /* 取不到元数据的条目，日志里点名 */
   for (const r of rows) {
     const it = await progressItem(r, accountId);
     if (it) items.push(it);
-    else skipped += 1;
+    else {
+      skipped += 1;
+      skippedIds.push(String(r.item_id || '(空)'));
+    }
   }
   return {
     status: 200,
     body: { Items: items, TotalRecordCount: items.length },
     log:
-      `${label}：库里 ${rows.length} 条 → 列出 ${items.length} 条${skipped ? `（${skipped} 条取不到元数据，未列出）` : ''}` +
+      `${label}：库里 ${rows.length} 条 → 列出 ${items.length} 条${skipped ? `（${skipped} 条取不到元数据，未列出：${skippedIds.slice(0, 8).join(', ')}${skipped > 8 ? ' …' : ''}）` : ''}` +
       briefIds(items),
   };
 }
@@ -1403,8 +1441,19 @@ async function getResume(requestedId, req, query) {
   if (denied) return denied;
   const accountId = accountIdFor(req, requestedId);
   if (!accountId) return { status: 200, body: { Items: [], TotalRecordCount: 0 }, log: '账号认不出 → 空' };
-  const rows = db.listResume(accountId, limitOf(query, 20));
-  return progressList(rows, accountId, '继续观看');
+  /* ---- 同一部剧只留一张卡 ----
+   * `Items/Resume` 按条目（Episode 级）返回，同 `SeriesId` 的聚合本是客户端的事；
+   * 但主流第三方客户端并不聚合 —— 同一部剧每看一集就多出一张卡。
+   * 这里按 SeriesId（域名 + 条目号，不含季集）归组，每组只留**最近播放**那条 ——
+   * `db.listResume` 已按最近播放倒序，首次遇到即保留。
+   * 电影没有季集（`p.season === null`），各自独立、不参与合并。
+   * 先多取 4 倍再截断，避免去重后凑不满客户端要的条数。 */
+  const want = limitOf(query, 20);
+  const rows = db.listResume(accountId, want * 4);
+  const dedup = dedupResumeBySeries(rows);
+  const page = progressList(dedup.kept.slice(0, want), accountId, '继续观看');
+  if (dedup.merged) page.log = `同剧 ${dedup.merged} 条已合并 · ${page.log}`;
+  return page;
 }
 
 /**
@@ -2358,7 +2407,7 @@ async function getSeasons(showId) {
  * 分集数据必须走 season 接口（剧接口只有 seasons[] 汇总，没有 episodes[]），见 metaBridge.lookupSeason。
  * 剧名（`SeriesName`）**额外 lookup 一次**取（命中插件缓存、不额外打上游）—— 见指南「十」#8-3。
  */
-async function getEpisodes(showId, seasonId) {
+async function getEpisodes(showId, seasonId, opts = {}) {
   const show = metaBridge.parseItemId(showId);
   /* ⚠️ **路径里给「季 Id」也算数**（真机实测容错）：
    * 官方文档写的是 `Shows/{Id}/Episodes` 里 Id = **剧**，但真机（`emby.example.com`）实测
@@ -2384,7 +2433,20 @@ async function getEpisodes(showId, seasonId) {
     }
   } else {
     if (!season || season.season === null) {
-      return empty(seasonId ? `SeasonId 认不出 → 空：${seasonId}` : '没有 SeasonId → 空');
+      if (seasonId) return empty(`SeasonId 认不出 → 空：${seasonId}`);
+      /* 不带 SeasonId → 回全部季的分集：官方语义里剧的分集列表不受季过滤 */
+      const sOut = await getSeasons(metaBridge.itemId(show.domain, 'tv', show.entryId));
+      if (sOut.status !== 200) return sOut;
+      const merged = [];
+      for (const s of sOut.body.Items || []) {
+        const one = await getEpisodes(metaBridge.itemId(show.domain, 'tv', show.entryId), s.Id);
+        if (one.status === 200 && one.body && one.body.Items) merged.push(...one.body.Items);
+      }
+      return {
+        status: 200,
+        body: { Items: merged, TotalRecordCount: merged.length },
+        log: `id=${showId} 不带 SeasonId → 全部分集 ${merged.length} 条（对齐 Emby 官方语义）`,
+      };
     }
     if (season.entryId !== show.entryId) return empty(`SeasonId 不是这个剧的季 → 空：${seasonId}`);
     n = season.season;
@@ -2446,6 +2508,33 @@ async function getEpisodes(showId, seasonId) {
       if (e.stillPath) item.PrimaryImageAspectRatio = 1.7777778; // 剧照是 16:9；baseItem 给的是海报比例，这里改回来
       return item;
     });
+
+  /* ---- Fields 含 MediaSources → 前 N 集补版本数组（客户端版本选择 UI 的数据源） ----
+   * 真机对照（予初Emby 4.9.5 实测）：Series 详情与 Seasons 列表**从不**带 MediaSources，
+   * 只有 Episodes 列表在请求点名 `Fields=MediaSources` 时逐集回数组 —— Hills 点剧的
+   * 版本选择 UI 读的就是这份（本层从前忽略 Fields → 该 UI 没有数据）。
+   * 成本：按 min(集数, Limit 或默认 30) 逐集复用 getItem —— agg/插件缓存命中不打上游，
+   * 冷缓存整剧只多 1 次上游（那一次本来点集时也要打）；不带该 Fields 的请求零变化。
+   * token 只用于版本内字幕轨 DeliveryUrl 埋 api_key；单集失败静默跳过，列表主体照回。 */
+  const wantSources = /(^|,)\s*MediaSources\s*(,|$)/i.test(String((opts && opts.fields) || ''));
+  if (wantSources && items.length) {
+    const limitN = Number(opts && opts.limit);
+    const cap = Math.min(items.length, Number.isFinite(limitN) && limitN > 0 ? limitN : 30);
+    let built = 0;
+    for (let i = 0; i < cap; i++) {
+      try {
+        const sub = await getItem(items[i].Id, (opts && opts.token) || '');
+        if (sub.status === 200 && Array.isArray(sub.body.MediaSources) && sub.body.MediaSources.length) {
+          items[i].MediaSources = sub.body.MediaSources;
+          if (Array.isArray(sub.body.MediaStreams) && sub.body.MediaStreams.length) {
+            items[i].MediaStreams = sub.body.MediaStreams;
+          }
+          built++;
+        }
+      } catch (e) { /* 单集失败静默跳过 —— 列表主体必须回（回退原则） */ }
+    }
+    seasonNote += `；前 ${cap} 集带版本 ×${built}`;
+  }
 
   return {
     status: 200,
@@ -2742,16 +2831,11 @@ async function getItem(itemId, token = '') {
 
   if (!found) return { status: 404, body: { error: '没有这个条目' }, log: `列表里没有 ${itemId} → 404` };
 
-  /* ---- 不可播类型（剧 / 季）：上游元数据照给，**源那一趟不跑** ----
-   * Emby 里「剧」「季」是**容器**（真机就是 `IsFolder:true / CanPlay:false`），版本清单
-   * （MediaSources）的语义是"这里有 N 个能直接播的文件"，给了客户端会以为整部剧是一个文件、
-   * 给出播放入口 —— 而源里每条线路对应的是一集一个文件，点了必然播不出来。
-   * 所以按设计**不给版本列表**（下面的 `if (!isPlayable(...)) continue` 就是这条规矩）。
-   *
-   * 从前是"先把源整趟跑完（4~7 秒）、算出线路与定位，**然后**才判类型、再全丢掉"——
-   * 现在把判断提到问聚合层**之前**：结果一模一样（`sources` 为空时下面那些条目级字段
-   * 本来也不会被填），只是不再白跑那一趟。实测剧集详情 5~6 秒 → 几十毫秒。 */
-  if (!isPlayable(found.Type)) {
+  /* ---- 季（Season）查源站给版本列表；剧（Series）与其余不可播容器不查 ----
+   * 季是容器，但部分客户端把季条目的 MediaSources 当作线路选择入口，因此季要查源站、
+   * 并把版本目标锚到该季第 1 集。剧不查：点剧的正确流程是「直出分集 → 点某一集再选版本」，
+   * 剧条目再弹一层锚到 S1E1 的版本列表属于多余一环。BoxSet 等容器同理不查。 */
+  if (found.Type !== 'Season' && !isPlayable(found.Type)) {
     return {
       status: 200,
       body: found,
@@ -2861,9 +2945,7 @@ async function getItem(itemId, token = '') {
       if (det.targetNote) dg.TargetNote = det.targetNote;
       detailDigests.push(dg);
 
-      /* **兜底**：不可播类型（剧/季）不进版本列表。正常走不到这里 ——
-       * 函数开头那个「拿到上游元数据后先判类型」的早返回已经把剧/季挡在聚合层之前了
-       * （见 `getItem` 里那段说明）；留着是给以后新增类型时的保险。 */
+      /* PLAYABLE_TYPES 已含剧/季，这里只挡未来新增的意外类型（理论上走不到）。 */
       if (!isPlayable(found.Type)) continue;
       /* 可播目标：**电影 = 该线路下的每个播放项**（多条压制版本各自成一个版本）；
        * **剧集 = 定位到的这一集**。判据见 `wantLocator`（电影的 `pick: 'items'`）与
@@ -2998,9 +3080,7 @@ async function getItem(itemId, token = '') {
     : '';
   const noRefNote = noRef ? `（另有 ${noRef} 个播放项没有 ref，不进版本列表 —— 插件没照契约给）` : '';
   const filterNote =
-    !isPlayable(found.Type)
-      ? ` 非可播类型「${found.Type}」，按设计不给版本列表（源里 ${totalLines} 条线路）` /* 兜底：早返回之后正常走不到 */
-      : (lfStat && lfStat.raw
+    (lfStat && lfStat.raw
           ? ` 线路过滤(/${lfStat.raw}/)${lfStat.invalid ? '规则非法，已忽略' : ''}（聚合层已滤）：` +
             `源里 ${lfStat.before} 条 → 到手 ${totalLines} 条` +
             (lfStat.before > 0 && totalLines === 0 ? '（规则把线路全滤掉了）' : '')
@@ -3486,39 +3566,60 @@ function decodeSourceToken(token) {
  * 实现上直接复用 getItem（元数据 + 线路 + MediaSources 都在那儿），不重复一遍。
  */
 /**
- * 「可播类型」：**集**（Episode）与**电影**（Movie）。剧/季是容器 —— 给了客户端会以为能播。
+ * 「可播类型」：**集**（Episode）、**电影**（Movie）、**季**（Season）——
+ * 季是容器，但部分客户端拿季条目的 MediaSources 当**线路选择入口**
+ * （版本目标补位第 1 集，见 `wantLocator`）；**剧（Series）不给**：点剧应直出分集，
+ * 版本选择发生在集/季层，剧条目不再弹一层锚 S1E1 的版本列表。
  *
  * **电影 / 剧集两套取法**（见 docs/adr/0022）：
  *   · 电影 —— `pick: 'items'`：每条线路的**每个播放项**各成一个版本（多个压制版本全都列出来），
  *     版本 Id 里带 `i`（第几项）；
- *   · 集   —— 按季集号定位**这一集**，版本 Id 里不带 `i`（缺省 0）。
+ *   · 集 / 季 —— 按季集号定位**这一集**（季缺集号 → 定位第 1 集），版本 Id 里不带 `i`（缺省 0）。
  * 两套取法共用同一条播放链路（`Id` → `Path` → `PlaybackInfo` → 拉流），差别只在"取到哪一项"。
  */
-const PLAYABLE_TYPES = new Set(['Episode', 'Movie']);
+const PLAYABLE_TYPES = new Set(['Episode', 'Movie', 'Season']);
 function isPlayable(type) {
   return PLAYABLE_TYPES.has(type);
 }
 
-/** Id 层面判断可播：集 = tv 带季集；电影 = movie 且不带季集（形状由 metaBridge.parseItemId 保证） */
+/** Id 层面判断可播（含剧/季，版本与播放链路要走）：电影不带季集；tv 的**季/集/剧**三种形状都算 ——
+ *  剧/季 Id 要能走 PlaybackInfo（客户端选完版本要问播放信息）与拉流（版本 Id 里 ref 俱全）。
+ *  形状仍由 metaBridge.parseItemId 保证。 */
 function isPlayableId(p) {
   if (!p) return false;
-  return p.type === 'movie' ? p.season === null && p.episode === null : p.season !== null && p.episode !== null;
+  if (p.type === 'movie') return p.season === null && p.episode === null;
+  return p.type === 'tv';
 }
 
 /**
  * 交给聚合层的**取法坐标**（电影/剧集两套取法，见 docs/adr/0022）：
  *   · 电影 → `{ pick: 'items' }`：每条线路的**每个播放项**各算一个可播目标（多条压制版本各自成版本）；
- *   · 集   → 照实传季集号：按集名里的集号定位**这一集**。
+ *   · 集   → 照实传季集号：按集名里的集号定位**这一集**；
+ *   · 剧/季 → 补位 `episode: 1`（季带季号、剧连季号都无 → 第 1 季第 1 集）：
+ *     它们没有"自己这一集"，版本列表要真能播就得锚到确定存在的第 1 集。
  */
 function wantLocator(p) {
-  return p.type === 'movie' ? { pick: 'items' } : { season: p.season, episode: p.episode };
+  if (p.type === 'movie') return { pick: 'items' };
+  if (p.episode !== null && p.episode !== undefined) return { season: p.season, episode: p.episode };
+  return { season: p.season === null || p.season === undefined ? 1 : p.season, episode: 1 };
 }
 
-/** 日志里"定位到哪"：集写季集号；电影写「按播放项」；其余如实写类型。 */
+/** 日志里"定位到哪"：集写季集号；电影写「按播放项」；剧/季写补位后的第 1 集。 */
 function locatorLabel(type, p) {
   if (type === 'Episode') return `S${p.season}E${p.episode}`;
   if (type === 'Movie') return '电影（按播放项）';
-  return `（非可播类型：${type}）`;
+  if (type === 'Season') return `S${p.season || 1}E1（季补位）`;
+  if (type === 'Series') return 'S1E1（剧补位）';
+  return `（${type}）`;
+}
+
+/** 由 Id 形状推 Emby 类型标签（拉流日志用）——此前 tv 一律硬编码 Episode，
+ *  剧/季 Id 走到拉流会打成 `SnullEnull` 假坐标。shape 由 metaBridge.parseItemId 保证。 */
+function typeLabelOf(p) {
+  if (p.type === 'movie') return 'Movie';
+  if (p.shape === 'show') return 'Series';
+  if (p.shape === 'season') return 'Season';
+  return 'Episode';
 }
 
 async function getPlaybackInfo(itemId, token = '') {
@@ -3668,7 +3769,7 @@ async function resolveStream(itemId, src, req) {
     return {
       status: e.status || 502,
       body: { error: e.message || '取播放地址失败', code: e.code },
-      log: `${locatorLabel(p.type === 'movie' ? 'Movie' : 'Episode', p)} 解析地址失败（${e.code}：${e.message || ''}）`,
+      log: `${locatorLabel(typeLabelOf(p), p)} 解析地址失败（${e.code}：${e.message || ''}）`,
     };
   }
   /* 拉流地址上可以带 `?threads=&chunkKB=` 覆盖搬运参数（见 stream.js 的 urlRelayParams）：
@@ -3709,7 +3810,7 @@ async function finishStream({ p, pr, playVia, origin, over }) {
   }
   /* 措辞按 **Emby 的类型**走：`p.type` 是上游的 `tv`/`movie`，直接喂 locatorLabel 会得到
    * 「非可播类型：tv」这种误导日志（早期一直这么打）。 */
-  const label = locatorLabel(p.type === 'movie' ? 'Movie' : 'Episode', p);
+  const label = locatorLabel(typeLabelOf(p), p);
   /* 该线路要求请求头（头是源自己内嵌在 proxy URL 里的例外，那种 header 是空的）。
    * 各档"带得了带不了"不是一回事，所以分开说，别让它变成"点了播放没反应"的无头案。 */
   const reqHeaders = Object.keys(headers || {});
