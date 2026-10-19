@@ -427,7 +427,55 @@ module.exports = function routes(r) {
       return sendResult(res, denied);
     }
 
-    const out = await service.getEpisodes(params.showId, seasonIdOf(query));
+    /* token 下传给 getEpisodes（版本内字幕 DeliveryUrl 埋 api_key 用）。 */
+    const out = await service.getEpisodes(params.showId, seasonIdOf(query), {
+      token: service.tokenFrom(req).token,
+    });
+    /* ---- Fields 含 MediaSources 时，分集列表逐集补版本数组 ----
+     * 客户端的版本选择 UI 读的是 Episodes 条目上的 MediaSources；真机对照：Series 详情与
+     * Seasons 列表从不带该字段，只有 Episodes 列表在请求点名时才逐集回数组。
+     * 为什么挂在 handler 而不是 service 内部：`getEpisodes` 有「不带 SeasonId → 全部分集」
+     * 的提前返回分支，挂在返回之后可以一次覆盖两条分支；query 用 `.get()` 取值
+     * （路由器给的是 URLSearchParams），大小写与 `seasonIdOf` 同款放宽。
+     * 成本：仅带该 Fields 的请求执行，按 `min(集数, 30)` 逐集复用 `getItem`
+     * （agg/插件缓存命中不打上游）；单集失败静默跳过，列表主体照回。 */
+    const fieldsRaw = String(query.get('Fields') || query.get('fields') || '');
+    if (/(^|,)\s*MediaSources\s*(,|$)/i.test(fieldsRaw) &&
+        out && Number(out.status) < 400 && out.body && Array.isArray(out.body.Items) && out.body.Items.length) {
+      const limitN = Number(query.get('Limit') || query.get('limit'));
+      /* ---- 逐集补版本的硬上限 ----
+       * 上限若直接取客户端的 `Limit`，请求 `Limit=200` 而剧有 163 集时等于不限，
+       * 逐集请求数随集数线性增长（163 集实测加载以分钟计）。这里固定夹到 30：
+       * 一屏加邻近翻页够用；超出部分客户端点进单集时仍能从 PlaybackInfo 拿到版本列表。 */
+      const CAP_MAX = 30;
+      const cap = Math.min(out.body.Items.length, Number.isFinite(limitN) && limitN > 0 ? limitN : CAP_MAX, CAP_MAX);
+      const msToken = service.tokenFrom(req).token;
+      let built = 0;
+      /* ---- 并发 4 路 ----
+       * 串行执行时总耗时是 cap 次网络往返之和；每集内部仍复用 `getItem`
+       * （agg/插件缓存命中不打上游），单集失败静默跳过。 */
+      const CONC = 4;
+      for (let i = 0; i < cap; i += CONC) {
+        const batch = [];
+        for (let j = i; j < Math.min(i + CONC, cap); j++) {
+          batch.push((async (k) => {
+            try {
+              const sub = await service.getItem(out.body.Items[k].Id, msToken);
+              if (sub && Number(sub.status) === 200 && sub.body &&
+                  Array.isArray(sub.body.MediaSources) && sub.body.MediaSources.length) {
+                out.body.Items[k].MediaSources = sub.body.MediaSources;
+                if (Array.isArray(sub.body.MediaStreams) && sub.body.MediaStreams.length) {
+                  out.body.Items[k].MediaStreams = sub.body.MediaStreams;
+                }
+                built++;
+              }
+            } catch (e) { /* 单集失败静默跳过 —— 列表主体必须回（回退原则） */ }
+          })(j));
+        }
+        await Promise.all(batch);
+      }
+      out.log = (out.log || '') + `；前 ${cap} 集带版本 ×${built}`;
+    }
     service.applyUserData(out, userIdOf(query), req);
     log.logResult(req, `分集列表 Shows/${params.showId}/Episodes`, out, q + " " + log.countOf(out, "Items"));
     return sendJson(res, out.status, out.body);
