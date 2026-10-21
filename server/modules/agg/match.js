@@ -43,17 +43,30 @@
  */
 
 /**
- * **片名归一化**：去空格、全角半角标点、括号、破折号等，小写比较。
+ * **片名归一化**：去空格、全半角标点、括号、破折号等，小写比较。
  *
  * 放在本文件（而不是上游协议层）是因为它属于**打分知识**：它是"这两个名字是不是同一个名字"的
  * 判据之一，与 `cleanTitle` / 相似度同源。上游协议层已随源插件搬走，
  * 面板这边只留"怎么判"。
+ *
+ * ⚠️ **标点、全半角、空格一律不参与比较**（这三样是"同片不同写法"最常见的来源，不是片名信息）：
+ *   ① `normalize('NFKC')` 先把全角折成半角、合成字符拆开 —— `２`→`2`、`：`→`:`、
+ *      `Ⅳ`→`IV`、`②`→`2`、全角空格→空格。**没有这一步，`坠落２：死点` 与 `坠落2：死点`
+ *      就是两个名字**：相似度只有 0.80，被 0.85 的分数线挡在门外（实测踩过）。
+ *   ② 再用 Unicode 类别一次清干净，而不是维护一张标点字符表 ——
+ *      `\p{P}` 标点（`:` `·` `「」` `－`）、`\p{S}` 符号（`+` `~` `×` 与 emoji）、
+ *      `\p{Z}` 分隔符（含全角空格）、`\p{C}` 格式与控制字符（零宽空格、BOM）。
+ *      手写表必然漏（原来那张表就漏了 `～` 之外的 `〜`、`＂`、`＠` 这类全角变体），
+ *      而漏一个字符就够把同片判成不同片。
+ *   ③ 空白单独先去掉：`新选组镇魂歌 江户青春篇` 与 `新选组镇魂歌江户青春篇` 必须同名
+ *      （多一个空格就聚不到资源，是同一类问题的另一张脸）。
  */
 function normName(s) {
   return String(s || '')
+    .normalize('NFKC')
     .toLowerCase()
     .replace(/[\s\u3000]+/g, '')
-    .replace(/[·・.,，。:：;；!！?？'"“”‘’()（）\[\]【】《》\-_—~～、/\\|+*&#@%$^]/g, '');
+    .replace(/[\p{P}\p{S}\p{Z}\p{C}]+/gu, '');
 }
 
 /* ---------------------------------------------------------------- 词表 */
@@ -124,19 +137,24 @@ function isNoiseOnly(s) {
 
 /**
  * 清洗后的"主干"（给名字分用；`\u0001` 里包的是年份，会在这里被剥掉）。
- * 最后一步把**非中英数字**的符号一律去掉 —— 源很喜欢在名字前面挂 emoji/图标
+ * 最后一步把**非文字**的符号一律去掉 —— 源很喜欢在名字前面挂 emoji/图标
  * （`🎬斗破苍穹(2017)`、`🗄斗破苍穹年番…`），不清掉就变成"相似 0.82"被分数线挡在门外。
+ *
+ * ⚠️ 最后那步按 **Unicode 文字类别**筛（`\p{L}` 字母 + `\p{N}` 数字），不是写死
+ * `\u4e00-\u9fffa-zA-Z0-9`：后者把**假名与谚文整段删掉**（`\u3040-\u30ff` 不在 `\u4e00-\u9fff` 里），
+ * 番号片那种以假名为主的日文原名会一个字都不剩。
  */
 function cleanTitle(raw) {
   let s = stripBrackets(normNameForClean(raw));
   s = s.replace(/\u0001\d{4}\u0001/g, '');
   for (const re of NOISE_RE) s = s.replace(re, '');
-  return s.replace(/[^\u4e00-\u9fffa-zA-Z0-9]+/g, '').trim();
+  return s.replace(/[^\p{L}\p{N}]+/gu, '').trim();
 }
 
-/* 清洗阶段要保留括号结构，所以先做一次"温和"归一（去空格、去大部分标点），而不是直接用 normName */
+/* 清洗阶段要保留括号结构，所以先做一次"温和"归一（NFKC + 去空格、去大部分标点），而不是直接用 normName */
 function normNameForClean(raw) {
   return String(raw || '')
+    .normalize('NFKC')
     .replace(/[\s\u3000]+/g, '')
     .replace(/[：:；;，,。！!？?]/g, '');
 }
@@ -198,8 +216,10 @@ function sameCodeIn(a, b) {
 
 /** 从名字与简介里抽：主干、年份、季号、更新到第几集 */
 function extractSignals(vodName, vodRemarks) {
-  const raw = String(vodName || '');
-  const rem = String(vodRemarks || '');
+  /* 先 NFKC 再抽：源里全角写的年份/季号/集数（`（２０２４）`、`第２季`、`更２１１`）不折成半角就抽不出来，
+   * 而这类"全角写法"与标点、空格一样，都是同一部片的不同写法，不该影响判据。 */
+  const raw = String(vodName || '').normalize('NFKC');
+  const rem = String(vodRemarks || '').normalize('NFKC');
   const both = raw + ' ' + rem;
 
   let year = null;
@@ -266,12 +286,50 @@ function lcsLen(a, b) {
 /**
  * 名字分（0~1）。`reject: true` = **出局**（不是"分低"，是"根本不是一部片"）。
  * 分档：完全相同 1.0 › 番号一致 1.0 › 主干同名 + 受控限定词 0.95 › 相似度（0.5~1）
+ *
+ * **两侧形态不对称这件事必须处理**：候选名来自站源 `vod_name`（常带 `[HD]`、`更新至211集`、
+ * `🎬` 这类噪声），目标名来自元数据插件（干净的片名），所以候选名比的是**清过噪声的主干**。
+ * 但目标名本身也可能带东西 —— 年份 `(2024)`、平台标记 —— 而它一旦被清掉，就再也比不回去了。
+ * 做法：**目标名按两种形态各比一遍，取分高的那次**（见 `titleForms`）：
+ *   ① 清噪声后的主干（与候选同一把尺子）
+ *   ② 只做归一（保留年份等原文信息）的原名
+ * 两种形态都得不到分才算对不上，所以**只会抬分、不会降分**，不改变任何"原本就命中"的判定。
  */
 function nameScore(wantName, candidateName) {
-  const w = normName(wantName);
+  const forms = titleForms(wantName);
+  if (!forms.length) return { score: 0, why: '目标名为空', reject: true };
   const c = normName(cleanTitle(candidateName));
-  if (!w) return { score: 0, why: '目标名为空', reject: true };
   if (!c) return { score: 0, why: '候选名清不出主干', reject: true };
+
+  let best = null;
+  let miss = null;
+  for (const w of forms) {
+    const one = compareTitle(w, c, wantName, candidateName);
+    if (!one.reject) {
+      if (!best || one.score > best.score) best = one;
+      if (best.score >= 1) break; // 满分没有更高的可能，不必再比另一种形态
+    } else if (!miss) {
+      miss = one; // 留第一条出局理由（干净形态的），日志里更好读
+    }
+  }
+  return best || miss || { score: 0, why: '无公共主干', reject: true };
+}
+
+/**
+ * 目标名的**比较形态**（去重、去空）：先"清过噪声的主干"，再"只做归一的原文"。
+ * 顺序有意义：主干形态先比，出局理由也优先用它，日志里更接近"两个片名差在哪"。
+ */
+function titleForms(name) {
+  const clean = normName(cleanTitle(name));
+  const raw = normName(name);
+  const out = [];
+  if (clean) out.push(clean);
+  if (raw && raw !== clean) out.push(raw);
+  return out;
+}
+
+/** 单一形态的名字比较（`w` 是目标名的某个形态，`c` 是候选名主干；两者都已归一） */
+function compareTitle(w, c, wantName, candidateName) {
   if (c === w) return { score: 1, why: '同名' };
   if (c.startsWith(w) && QUALIFIER_RE.test(c.slice(w.length))) return { score: 0.95, why: '主干同名+限定词' };
   if (w.startsWith(c) && QUALIFIER_RE.test(w.slice(c.length))) return { score: 0.95, why: '候选名是主干+限定词' };

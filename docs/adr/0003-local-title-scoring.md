@@ -1,7 +1,7 @@
 # ADR-0003 挑片判据：本地打分，不做 TMDB 反查
 
 - 状态：已采纳（取代早期的"精确同名 + TMDB 别名回退"）
-- 相关：[match.js](../../server/modules/agg/match.js) · [emby-compat.md](../emby-compat.md) · [0004](0004-no-same-site-dedup.md) · [0005](0005-continuation-fetch.md)
+- 相关：[match.js](../../server/modules/agg/match.js) · [emby-compat.md](../emby-compat.md) · [0004](0004-no-same-site-dedup.md) · [0005](0005-continuation-fetch.md) · [0082](0082-title-normalization-nfkc.md)（归一化口径：标点/全半角/空格不参与比较）
 
 ## 背景
 
@@ -20,6 +20,7 @@
 - 权重：名字 `0.7` · 季集 `0.2` · 年份 `0.1`；**缺项不计入分母**（源里常常没有季集或年份）。
 - 名字分：清洗后相等 `1.0`；主干同名 + 受控限定词 `0.95`；其余按最长公共子序列相似度。
   清洗剥掉更新话术、画质与字幕标注、体积、年份、噪声括号、分类后缀。
+  归一化口径（标点、全半角、空格不参与比较）见 [0082](0082-title-normalization-nfkc.md)。
 - 闸门一（硬拒）：清洗后没有公共主干，或相似度 < `0.5`，直接出局。
 - 闸门二（分数线）：`matchMinScore` 默认 `0.85`；**填 0 表示不按分数线筛选**，
   此时只按分数排名取前 `matchMaxItems` 条。

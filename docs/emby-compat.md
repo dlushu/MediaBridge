@@ -733,6 +733,11 @@ docker logs -t media-bridge-panel              # 带时间戳
       分项：名字（清洗后相等 1.0 / 主干同名 + 受控限定词 0.95 / 其余按 LCS 相似度）、
       季集（`更211` / `更新至211集` / `第N集` / `EP14` / 季号；对不上只给 0、不扣分）、
       年份（标题里的四位数字，差 1 年算 0.6）。
+    - **归一化口径：标点、全半角、空格不参与比较**（见 [ADR-0082](adr/0082-title-normalization-nfkc.md)）——
+      片名先 `NFKC` 折叠再按 Unicode 类别删标点/符号/分隔符，所以 `坠落2：死点` 与 `坠落２：死点`、
+      `新选组镇魂歌 江户青春篇` 与 `新选组镇魂歌江户青春篇` 都算同名；目标名另以"保留年份的原文"再比一遍
+      （两形态取高分，相对只比主干只抬不降）。归一化本身有一类下调：旧实现会删掉候选名里的全角字符
+      （`庆余年` 与 `庆余年２` 曾判 `1.0`），现在按半角同款口径算 `0.95`。
     - **两道闸门**：① **名字硬拒**（清洗后没有公共主干、或相似度 < 0.5 → 直接出局，拦 `斗破苍穹4：逃亡`、`斗破苍穹·止戈`）；
       ② **分数线** `matchMinScore`（默认 0.85；**填 0 = 不筛选**，那就只按分数排名取前 `matchMaxItems` 条）。
     - **片源认证（`vod_exact`）短路在打分之前**：候选行若带 `vod_exact === true`（片源插件自行认准
@@ -1209,7 +1214,7 @@ docker logs -t media-bridge-panel              # 带时间戳
 | `server/modules/emby/routes.js` | 已实现端点（握手 / 登录 / 取用户资料 / 媒体库留白 / 条目列表占位 / 季列表占位 / 分集列表占位 / 单条详情 / PlaybackInfo / Stream）+ 面板自用端点（账号管理 `GET/POST /api/emby/accounts`、`PUT/DELETE /api/emby/accounts/{id}`）+ 通配监控路由（记录 + 501，与 `notImplemented()` 共用），**通配必须注册在最后**。stream 端点在这一层**一律 302**（service 只回 `{url, headers, parse}` 描述，地址改写也在 service 做，见 `redirectUrl()`）；路由把 `req.headers.host` 传下去当"客户端域名" |
 | `server/modules/emby/db.js` | emby 私有的本地库（**Node 内置 `node:sqlite`**，零依赖）：开库/建表/schema、`accounts` 表（用户名 + `username_lc UNIQUE` + scrypt 哈希 + 最近登录）、`sessions` 表（登录发的 AccessToken → 账号/设备/最后活跃）、`hashPassword/verifyPassword`、账号与会话的 CRUD、`publicAccount()`（**对外字段映射只此一处**，防手滑回传哈希）、`migrateLegacy()`（单账号明文 → 库，并**无条件清掉设置里的残留明文**）。文件 `data/emby/emby.db`，权限 600；**不存 `user_id` 列**（serverId 一变就全废，运行时现算） |
 | `server/modules/emby/service.js` | 端点业务逻辑：服务器 Id、登录校验（多账号 + scrypt）、**AccessToken 校验（`tokenFrom` / `authorize`，无效即 401）**、UserDto 组装、媒体库（`getViews`——**按真机字段表补齐，含封面与 `CollectionType`**）、条目列表（`getItems`）、**最新条目（`getLatest`，回裸数组，顺序由模块决定）**、季列表、分集列表、单条详情（元数据复用列表实现 + 聚合取线路/绑定 + 线路→`MediaSources`）、播放信息（复用 getItem）、拉流解析（`resolveStream`：现取 detail+play，只回描述，不碰 res）；公共函数 `assertUser()`（账号校验，各端点共用）/ `baseItem()`（条目公共字段）/ `metaFailure()`（上游失败 → 状态码 + 错误体，各端点共用）/ `mbpSourceId()` + `parseMbpSourceId()`（`mbp:` + base64url(deflateRaw(JSON `{r, v?, s?}`)) 的编解码）/ `streamPath()`（稳定 Path 拼接）/ `emptyUserData()` + `emptyViewUserData()`（**条目与库条目的 `UserData` 形状不同**）/ `feedOfQuery()`（认出客户端"只要推荐"的轮播查询 → 路由到插件声明了 `feed` 的行）/ `libraryQueryOf()`（认出"无 `ParentId` 的裸列表查询" → 回顶层库列表，与 `Views` 同款）/ `imageTag()`；`X-Emby-Authorization` 解析 |
-| `server/modules/agg/match.js` | **挑片判据（唯一一处）**：片名清洗（剥更新话术/画质/体积/年份/括号/分类后缀、去 emoji）+ 打分（名字 0.7 / 季集 0.2 / 年份 0.1，缺项不进分母）+ 两道闸门（名字硬拒 / 分数线可关）+ 按分数「取前 N」（**不去重**：同名照收，只统计）+ **片源认证短路**（候选行带 `vod_exact === true` → 直接记 1、不判名字，见 [ADR-0059](adr/0059-source-certified-candidate.md)）。取代了原来的「精确同名 + 上游别名回退」 |
+| `server/modules/agg/match.js` | **挑片判据（唯一一处）**：片名归一化（`NFKC` 折叠 + 按 Unicode 类别删标点/符号/空白 ⇒ 标点、全半角、空格不参与比较，见 [ADR-0082](adr/0082-title-normalization-nfkc.md)）+ 清洗（剥更新话术/画质/体积/年份/括号/分类后缀、去 emoji）+ 打分（名字 0.7 / 季集 0.2 / 年份 0.1，缺项不进分母）+ 两道闸门（名字硬拒 / 分数线可关）+ 按分数「取前 N」（**不去重**：同名照收，只统计）+ **片源认证短路**（候选行带 `vod_exact === true` → 直接记 1、不判名字，见 [ADR-0059](adr/0059-source-certified-candidate.md)）。取代了原来的「精确同名 + 上游别名回退」 |
 | `server/modules/agg/api.js` | **聚合层的进程内调用面**：`loadSites()`、`detail()`（**内部含搜索**，可用 site+vodId 走快路径）、`play()`（→ 播放地址，PlaybackInfo 会用）。路由层（`/api/agg/detail` / `/play`）与 emby 层**共用这一套**；失败统一 `{ok:false, error:{code,status,message}}` |
 | 聚合层契约（[develop.md](develop.md) 的「聚合层（agg）」一节） | `/api/agg/search`、`/api/agg/detail`、`/api/agg/play` 的入参、出参与错误码 |
 | 元数据插件源码（不在本仓库） | **元数据插件（域由插件自己申报）**：它自己的请求层 = 上游协议层 + 落盘缓存（元数据缓存的判据 / `cacheKey()` / `requestCached()` / `requestWithRetry()` / `search()` / 图片拼串 / `test()`，表 `meta` 与 `names` 落它自己的 `data/cache/`）、归一化（rich 字段 / 别名回退 / 季集）、它自己的设置（token / 基地址 / 语言 / 缓存策略）、它自己的设置页；动作 `register` / `lookup` / `season` / `search` / `get` / `test` / `http`。**面板不读它的设置**，只从「注册」拿图片基地址（契约第六节，决策见 [adr/0031](adr/0031-metadata-by-domain.md)） |

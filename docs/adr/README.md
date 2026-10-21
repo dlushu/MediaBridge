@@ -89,6 +89,7 @@
 | [0079](0079-image-address-three-forms.md) | 封面地址三形态：判据只认中继前缀，图床相对路径按 `imageBase` 拼 | 已采纳（修 1.9.5 的出图回归） |
 | [0080](0080-home-view-row-detail.md) | 首页库行的详情：认 `mbphome_*`、回库条目、查不到回 404 | 已采纳 |
 | [0081](0081-hide-unaired-episodes.md) | 分集列表按实例隐藏未播出的集（未来日期 / 末尾无日期占位；实例级开关，缺省开） | 已采纳 |
+| [0082](0082-title-normalization-nfkc.md) | 片名归一化：标点、全半角、空格不参与比较（NFKC + Unicode 类别；目标名两形态取高分） | 已采纳 |
 
 ## 新增一条 ADR
 
